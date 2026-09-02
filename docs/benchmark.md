@@ -406,6 +406,12 @@ ones.
 
 1. ~~Fix the distributions of the two existing families~~ (done
    2026-09-02, see §4.2; remaining: solvability past level 3 without BFS).
+   Addendum, same day: a corpus at the human bands alone gave a policy
+   trained from scratch no completions at all in 400M steps, while the
+   public games did (their tutorial levels are random-winnable). The
+   generator now has three curriculum stages of length bands
+   (`generate.STAGE_BANDS`); a corpus mixes them so the short stage
+   bootstraps learning and the human stage is the target.
 2. ~~Reward and protocol in relax-arc~~ (done 2026-09-02): `arc_vecenv`
    scores a completed level as `w_l · min(1, (baseline_l / actions_l)²)`
    and can lose a level at `cap × baseline_l` actions; public games use the
