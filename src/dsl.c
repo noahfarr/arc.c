@@ -30,6 +30,32 @@ int32_t arc_dsl_num_actions(const struct arc_dsl_spec *spec)
 	return spec->grid_w * spec->grid_h;
 }
 
+static uint64_t fnv(uint64_t h, const void *data, size_t len)
+{
+	const unsigned char *p = (const unsigned char *)data;
+
+	for (size_t i = 0; i < len; i++) {
+		h ^= p[i];
+		h *= 1099511628211ULL;
+	}
+	return h;
+}
+
+uint64_t arc_dsl_state_hash(const struct arc_game *game)
+{
+	const struct arc_dsl_spec *s = spec_of(game);
+	const struct arc_dsl_aux *aux = (const struct arc_dsl_aux *)game->aux;
+	size_t n = (size_t)s->grid_w * (size_t)s->grid_h;
+	uint64_t h = 1469598103934665603ULL;
+
+	h = fnv(h, &game->engine.level_index, sizeof(int32_t));
+	h = fnv(h, aux->grid, n);
+	h = fnv(h, aux->floor, n);
+	h = fnv(h, &aux->player_x, sizeof(int32_t));
+	h = fnv(h, &aux->player_y, sizeof(int32_t));
+	return h;
+}
+
 static void load_level(struct arc_game *game)
 {
 	const struct arc_dsl_spec *s = spec_of(game);

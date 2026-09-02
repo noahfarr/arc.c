@@ -42,6 +42,9 @@ struct arc_vec_env {
 	int32_t *level_actions;
 	int32_t reward_mode;
 	float cap;
+	float shaping;
+	float *phi;
+	float *phi_scale;
 	pthread_t *threads;
 	struct slot *slots;
 	pthread_mutex_t lock;
@@ -104,6 +107,65 @@ static void restart(struct arc_vec_env *vec, int32_t i, struct slot *owner)
 	vec->level_actions[i] = 0;
 }
 
+/* Distance to win of the current state, or -1 when off the table. */
+static int32_t table_distance(const struct arc_game_spec *s,
+			      const struct arc_game *g)
+{
+	int32_t level = g->engine.level_index;
+	int32_t lo, hi;
+	uint64_t key;
+
+	if (!s->state_hash || !s->dist_hash || !s->dist_offset)
+		return -1;
+	if (level < 0 || level >= g->levels->num_levels)
+		return -1;
+	lo = s->dist_offset[level];
+	hi = s->dist_offset[level + 1] - 1;
+	if (hi < lo)
+		return -1;
+	key = s->state_hash(g);
+	while (lo <= hi) {
+		int32_t mid = lo + (hi - lo) / 2;
+
+		if (s->dist_hash[mid] == key)
+			return s->dist_val[mid];
+		if (s->dist_hash[mid] < key)
+			lo = mid + 1;
+		else
+			hi = mid - 1;
+	}
+	return -1;
+}
+
+/* Reset the potential bookkeeping for env i at the start of a level. */
+static void begin_level_potential(struct arc_vec_env *vec, int32_t i)
+{
+	const struct arc_game_spec *s = &vec->pool[vec->task[i]];
+	struct arc_game *g = vec->games[i];
+	int32_t d = table_distance(s, g);
+
+	if (d > 0) {
+		vec->phi_scale[i] = 1.0f / (float)d;
+		vec->phi[i] = -1.0f;
+	} else {
+		vec->phi_scale[i] = 0.0f;
+		vec->phi[i] = 0.0f;
+	}
+}
+
+static float potential(struct arc_vec_env *vec, int32_t i)
+{
+	const struct arc_game_spec *s = &vec->pool[vec->task[i]];
+	int32_t d;
+
+	if (vec->phi_scale[i] == 0.0f)
+		return 0.0f;
+	d = table_distance(s, vec->games[i]);
+	if (d < 0)
+		return vec->phi[i];
+	return -(float)d * vec->phi_scale[i];
+}
+
 static float level_weight(const struct arc_game *g, int32_t level)
 {
 	int32_t n = g->levels->num_levels;
@@ -151,6 +213,8 @@ static void work(const struct worker_arg *a)
 		struct arc_game *g = vec->games[i];
 		if (a->reset_only) {
 			restart(vec, i, a->owner);
+			if (vec->shaping != 0.0f)
+				begin_level_potential(vec, i);
 			emit(a, i, vec->games[i]);
 			continue;
 		}
@@ -163,6 +227,15 @@ static void work(const struct worker_arg *a)
 		uint8_t capped = 0;
 		float shaped = shape_reward(vec, i, g, before_level, reward_i,
 					    &term, &capped);
+		if (vec->shaping != 0.0f && vec->phi_scale[i] != 0.0f) {
+			/* Completing the level lands on the goal: phi = 0. */
+			float next = reward_i > 0 ? 0.0f : potential(vec, i);
+			shaped += vec->shaping * level_weight(g, before_level) *
+				  (next - vec->phi[i]);
+			vec->phi[i] = next;
+		}
+		if (reward_i > 0 && !term && vec->shaping != 0.0f)
+			begin_level_potential(vec, i);
 		if (a->vec->packed) {
 			uint8_t *out = (uint8_t *)a->obs +
 				       (size_t)i * (FRAME_BYTES / 2);
@@ -196,6 +269,8 @@ static void work(const struct worker_arg *a)
 			arc_game_perform_action_frames(g, ARC_ACTION_RESET, 0, 0,
 						       NULL, 0);
 			vec->level_actions[i] = 0;
+			if (vec->shaping != 0.0f)
+				begin_level_potential(vec, i);
 			emit(a, i, g);
 			if (a->level)
 				a->level[i] = g->engine.level_index;
@@ -203,6 +278,8 @@ static void work(const struct worker_arg *a)
 				a->score[i] = g->engine.score;
 		} else if (term || trunc) {
 			restart(vec, i, a->owner);
+			if (vec->shaping != 0.0f)
+				begin_level_potential(vec, i);
 			emit(a, i, vec->games[i]);
 			if (a->level)
 				a->level[i] = vec->games[i]->engine.level_index;
@@ -287,8 +364,11 @@ struct arc_vec_env *arc_vecenv_new_pool(const struct arc_game_spec *pool,
 	vec->rng = calloc(num_envs, sizeof(uint32_t));
 	vec->elapsed = calloc(num_envs, sizeof(int32_t));
 	vec->level_actions = calloc(num_envs, sizeof(int32_t));
+	vec->phi = calloc(num_envs, sizeof(float));
+	vec->phi_scale = calloc(num_envs, sizeof(float));
 	vec->reward_mode = ARC_REWARD_LEVELS;
 	vec->cap = 0.0f;
+	vec->shaping = 0.0f;
 	for (int32_t i = 0; i < num_envs; i++) {
 		uint32_t state = (uint32_t)(seed + 0x9e3779b9u * (uint32_t)i);
 		vec->rng[i] = state ? state : 1u;
@@ -371,6 +451,8 @@ void arc_vecenv_free(struct arc_vec_env *vec)
 	free(vec->rng);
 	free(vec->elapsed);
 	free(vec->level_actions);
+	free(vec->phi);
+	free(vec->phi_scale);
 	free(vec);
 }
 
@@ -392,6 +474,13 @@ void arc_vecenv_set_reward(struct arc_vec_env *vec, int32_t mode, float cap)
 {
 	vec->reward_mode = mode;
 	vec->cap = cap;
+}
+
+void arc_vecenv_set_shaping(struct arc_vec_env *vec, float weight)
+{
+	vec->shaping = weight;
+	for (int32_t i = 0; i < vec->num_envs; i++)
+		begin_level_potential(vec, i);
 }
 
 void arc_vecenv_tasks(const struct arc_vec_env *vec, int32_t *out)
@@ -431,7 +520,9 @@ struct arc_vec_env *arc_vecenv_new(const struct arc_level_data *levels,
 				      aux_array,      aux_stride,
 				      statics,        simple_actions,
 				      num_simple,     has_click,
-				      max_frames,     NULL };
+				      max_frames,     NULL,
+				      NULL,           NULL,
+				      NULL,           NULL };
 	return arc_vecenv_new_pool(&spec, 1, num_envs, num_threads, 1);
 }
 

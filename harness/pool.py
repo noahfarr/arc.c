@@ -19,6 +19,10 @@ class Spec(ctypes.Structure):
         ("has_click", ctypes.c_int32),
         ("max_frames", ctypes.c_int32),
         ("baseline", ctypes.c_void_p),
+        ("state_hash", ctypes.c_void_p),
+        ("dist_hash", ctypes.c_void_p),
+        ("dist_val", ctypes.c_void_p),
+        ("dist_offset", ctypes.c_void_p),
     ]
 
 REWARD_LEVELS, REWARD_RHAE = 0, 1
@@ -39,6 +43,7 @@ def signatures(lib):
     lib.arc_vecenv_action_counts.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
     lib.arc_vecenv_set_reward.argtypes = [ctypes.c_void_p, ctypes.c_int32,
                                           ctypes.c_float]
+    lib.arc_vecenv_set_shaping.argtypes = [ctypes.c_void_p, ctypes.c_float]
     return lib
 
 
@@ -65,7 +70,7 @@ class Pool:
     def __init__(self, games, num_envs: int = 64, num_threads: int = 16,
                  seed: int = 0, library: Library | None = None,
                  reward: int = REWARD_LEVELS, cap: float = 0.0,
-                 max_frames: int = 8):
+                 max_frames: int = 8, shaping: float = 0.0):
         if isinstance(games, str):
             games = [games]
         games = list(games)
@@ -121,6 +126,9 @@ class Pool:
             specs, len(games), num_envs, num_threads, seed)
         self.lib.arc_vecenv_set_reward(ctypes.c_void_p(self.handle), reward,
                                        float(cap))
+        if shaping:
+            self.lib.arc_vecenv_set_shaping(ctypes.c_void_p(self.handle),
+                                            float(shaping))
         self.num_actions = int(self.lib.arc_vecenv_num_actions(self.handle))
 
     def _generated(self, path, num_envs, max_frames):
@@ -137,6 +145,14 @@ class Pool:
             arr = np.ascontiguousarray(labels["baselines"], np.int32)
             self._keep.append(arr)
             baseline = arr.ctypes.data
+        state_hash = dist_hash = dist_val = dist_offset = None
+        if labels.get("_distances") is not None:
+            dh, dv, do = (np.ascontiguousarray(a) for a in labels["_distances"])
+            self._keep += [dh, dv, do]
+            fn = getattr(self.library.lib, "arc_dsl_state_hash")
+            state_hash = ctypes.cast(fn, ctypes.c_void_p).value
+            dist_hash, dist_val, dist_offset = (dh.ctypes.data, dv.ctypes.data,
+                                                do.ctypes.data)
         return Spec(
             levels=ctypes.addressof(native.level_data),
             hooks=ctypes.addressof(native.hooks),
@@ -148,6 +164,10 @@ class Pool:
             has_click=1,
             max_frames=max_frames,
             baseline=baseline,
+            state_hash=state_hash,
+            dist_hash=dist_hash,
+            dist_val=dist_val,
+            dist_offset=dist_offset,
         )
 
     def tasks(self, out):

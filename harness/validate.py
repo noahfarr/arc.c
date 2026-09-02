@@ -110,6 +110,71 @@ def explore(game, aux_size: int, max_nodes: int = 50_000,
                        path=path)
 
 
+def distance_table(game, aux_size: int, max_nodes: int = 60_000,
+                   actions=None):
+    """Distance-to-win for every state reachable from the level's start,
+    keyed by the DSL's budget-free state hash, as (hashes, distances)
+    sorted by hash; None if the graph could not be exhausted. States that
+    cannot reach a win get distance -1 (the vecenv treats them as off the
+    table)."""
+    sym = game.library.sym
+    size = sym.game_state_size(game.handle, aux_size)
+    actions = actions or _actions_for(game)
+
+    def snapshot():
+        buf = (ctypes.c_uint8 * size)()
+        sym.game_save(game.handle, aux_size, ctypes.byref(buf))
+        return buf
+
+    def restore(buf):
+        sym.game_load(game.handle, aux_size, ctypes.byref(buf))
+
+    game.init()
+    start_level = int(sym.harness_level_index(game.handle))
+    root = snapshot()
+    root_key = int(sym.dsl_state_hash(game.handle))
+    seen = {root_key}
+    frontier = deque([(root, root_key)])
+    edges_in: dict[int, list[int]] = {root_key: []}
+    winners = set()
+    nodes = 0
+    while frontier:
+        state, key = frontier.popleft()
+        nodes += 1
+        if nodes > max_nodes:
+            return None
+        for action in actions:
+            restore(state)
+            game.act(*action)
+            level = int(sym.harness_level_index(game.handle))
+            status = game.state
+            if status == "WIN" or level > start_level:
+                winners.add(key)
+                continue
+            if status == "GAME_OVER":
+                continue
+            nxt = int(sym.dsl_state_hash(game.handle))
+            edges_in.setdefault(nxt, []).append(key)
+            if nxt in seen:
+                continue
+            seen.add(nxt)
+            frontier.append((snapshot(), nxt))
+    dist = {k: -1 for k in seen}
+    queue = deque()
+    for k in winners:
+        dist[k] = 1
+        queue.append(k)
+    while queue:
+        k = queue.popleft()
+        for prev in edges_in.get(k, ()):
+            if dist[prev] < 0:
+                dist[prev] = dist[k] + 1
+                queue.append(prev)
+    keys = np.array(sorted(dist), np.uint64)
+    vals = np.array([dist[int(k)] for k in keys], np.int32)
+    return keys, vals
+
+
 def random_solve_rate(game, trials: int = 10_000, horizon: int = 200,
                       seed: int = 0, actions=None) -> float:
     rng = np.random.default_rng(seed)

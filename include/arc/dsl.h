@@ -116,6 +116,10 @@ extern const struct arc_hooks arc_dsl_hooks;
 
 void arc_dsl_zero_aux(void *aux);
 int32_t arc_dsl_num_actions(const struct arc_dsl_spec *spec);
+/* Hash of the level, grid, floor and player position: everything a
+ * solver's distance-to-win depends on, and nothing it does not (the
+ * remaining budget in particular). */
+uint64_t arc_dsl_state_hash(const struct arc_game *game);
 
 #ifdef __cplusplus
 }

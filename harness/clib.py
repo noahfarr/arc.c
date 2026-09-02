@@ -108,6 +108,8 @@ class Library:
         s.certify_random.argtypes = [v, i, i, i, i, v, i, ctypes.c_uint32, v]
         s.game_hash.restype = ctypes.c_uint64
         s.game_hash.argtypes = [v, ctypes.c_size_t]
+        s.dsl_state_hash.restype = ctypes.c_uint64
+        s.dsl_state_hash.argtypes = [v]
         for name in ("harness_score", "harness_status", "harness_level_index"):
             fn = getattr(s, name)
             fn.restype, fn.argtypes = i, [v]

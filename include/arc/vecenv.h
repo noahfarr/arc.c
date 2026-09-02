@@ -23,6 +23,13 @@ struct arc_game_spec {
 	int32_t max_frames;
 	/* Per-level baseline action counts (human, or k x optimal), or NULL. */
 	const int32_t *baseline;
+	/* Solver distance-to-win tables for potential-based shaping, or
+	 * NULL: for level l the entries dist_offset[l] .. dist_offset[l+1]
+	 * of dist_hash (sorted) and dist_val, keyed by state_hash(game). */
+	uint64_t (*state_hash)(const struct arc_game *game);
+	const uint64_t *dist_hash;
+	const int32_t *dist_val;
+	const int32_t *dist_offset;
 };
 
 enum { ARC_REWARD_LEVELS = 0, ARC_REWARD_RHAE = 1 };
@@ -37,6 +44,12 @@ void arc_vecenv_set_packed(struct arc_vec_env *vec, int32_t packed);
  * baseline falls back to +w_l. With cap > 0 a level that runs past
  * cap * baseline_l actions is lost, as the benchmark terminates it. */
 void arc_vecenv_set_reward(struct arc_vec_env *vec, int32_t mode, float cap);
+/* Potential-based shaping from the distance tables: each step adds
+ * weight * w_l * (phi(s') - phi(s)) with phi(s) = -dist(s) / dist(start),
+ * so an optimal solve of level l collects exactly weight * w_l on the way,
+ * the same as its completion is worth. States off the table (levels the
+ * solver did not finish, or unreachable ones) get no shaping. */
+void arc_vecenv_set_shaping(struct arc_vec_env *vec, float weight);
 void arc_vecenv_tasks(const struct arc_vec_env *vec, int32_t *out);
 void arc_vecenv_action_ids(const struct arc_vec_env *vec, int32_t *out);
 void arc_vecenv_action_counts(const struct arc_vec_env *vec, int32_t *out);

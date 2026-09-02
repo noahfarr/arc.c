@@ -8,10 +8,21 @@ from .generate import sample_environment
 from .validate import certify
 
 
-def save(spec: Spec, labels: dict, path: Path) -> None:
+def save(spec: Spec, labels: dict, path: Path, distances=None) -> None:
+    """distances: per level, None or (hashes, dists) from
+    validate.distance_table; stored flat with per-level offsets."""
     path.parent.mkdir(parents=True, exist_ok=True)
+    hashes, dists, offsets = [], [], [0]
+    for entry in (distances or [None] * spec.num_levels):
+        if entry is not None:
+            hashes.append(np.asarray(entry[0], np.uint64))
+            dists.append(np.asarray(entry[1], np.int32))
+        offsets.append(offsets[-1] + (0 if entry is None else len(entry[0])))
     np.savez_compressed(
         path, layouts=spec.layouts, floors=spec.floors,
+        dist_hash=(np.concatenate(hashes) if hashes else np.zeros(0, np.uint64)),
+        dist_val=(np.concatenate(dists) if dists else np.zeros(0, np.int32)),
+        dist_offset=np.array(offsets, np.int32),
         kinds=np.array([[k.color, k.motion, k.motion_a, k.motion_b, k.deadly,
                          k.gravity, k.size, k.off_x, k.off_y, k.on_enter,
                          k.enter_a, k.enter_b, k.on_click, k.click_a,
@@ -47,10 +58,32 @@ def load(path: Path) -> tuple[Spec, dict]:
             pitch=int(p[4]), origin_x=int(p[5]), origin_y=int(p[6]),
             background=int(p[7]), rules=rules, budgets=budgets, **extra)
         labels = json.loads(bytes(z["labels"]).decode("utf-8"))
+        if "dist_offset" in z:
+            labels["_distances"] = (z["dist_hash"], z["dist_val"],
+                                    z["dist_offset"])
     return spec, labels
 
 
 FAMILIES = ("sokoban", "rooms")
+
+
+def _rekey(spec, level, library, aux_size, max_nodes):
+    """Distance table for `level` computed on the full spec, so hashes
+    carry the real level index."""
+    from .dsl import DslGame
+    from .validate import distance_table
+
+    g = DslGame(spec, library=library)
+    orig = g.init
+
+    def init():
+        orig()
+        library.sym.game_set_level(g.handle, level)
+    g.init = init
+    try:
+        return distance_table(g, aux_size, max_nodes=max_nodes)
+    finally:
+        g.close()
 
 # Human first-run actions over the BFS optimum on the public games we could
 # measure (tu93 levels 1-4: 1.06, 1.6, 1.8, 2.5; re86 level 1: 1.3): about
@@ -73,14 +106,18 @@ def baselines_for(shortest, budgets) -> list[int]:
 
 def build(count: int, out: Path, seed: int = 0, trials: int = 10_000,
           horizon: int = 800, threads: int = 8, verbose: bool = True,
-          families=FAMILIES, library=None) -> list:
+          families=FAMILIES, library=None, distance_nodes: int = 60_000) -> list:
     """Generate `count` environments across `families`, keep those whose
     non-tutorial levels a random policy wins at most 1 in 10,000 times
     (the foundation's bar), and save them with their labels."""
     import ctypes
 
+    import dataclasses
+
     from .clib import Library
+    from .dsl import DslGame
     from .generate import sample_rooms
+    from .validate import distance_table
 
     library = library or Library()
     aux_size = ctypes.sizeof(library.headers.struct("arc_dsl_aux"))
@@ -116,8 +153,24 @@ def build(count: int, out: Path, seed: int = 0, trials: int = 10_000,
                   "grid": [spec.grid_w, spec.grid_h],
                   "levels": spec.num_levels,
                   "mechanics": proposal.mechanics.get("kinds", [])}
+        distances = []
+        for level in range(spec.num_levels):
+            one = dataclasses.replace(spec, layouts=spec.layouts[level:level + 1],
+                                      floors=spec.floors[level:level + 1],
+                                      budgets=None)
+            g = DslGame(one, library=library)
+            table = distance_table(g, aux_size, max_nodes=distance_nodes)
+            g.close()
+            if table is not None:
+                # The table was built for a one-level spec (level index 0);
+                # the hash includes the level index, so rebuild the keys
+                # for the level's real index.
+                table = _rekey(spec, level, library, aux_size, distance_nodes)
+            distances.append(table)
+        labels["distances"] = [None if t is None else int(len(t[0]))
+                               for t in distances]
         name = f"env_{made:04d}"
-        save(spec, labels, out / f"{name}.npz")
+        save(spec, labels, out / f"{name}.npz", distances=distances)
         manifest.append({"name": name, **labels})
         made += 1
         if verbose:
