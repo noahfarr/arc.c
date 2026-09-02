@@ -257,13 +257,13 @@ Coverage against the public set, by the categories above:
 | category | covered | not covered |
 | --- | --- | --- |
 | avatar + arrows | yes | avatar *state* (ls20 loadout, tu93 size, sc25 scale), lives, energy refill |
-| click-to-select + arrows | no | cn04, ka59, sk48, sp80, ar25, m0r0 — 6 games |
-| ACTION5 (any semantics) | no | 9 games declare it |
+| click-to-select + arrows | yes (`sample_select`, 2026-09-02): click or ACTION5 selects a block, arrows slide it | pushing chains (ka59), rails (sk48), rotation (cn04) |
+| ACTION5 (any semantics) | cycle-selection only | 9 games declare it, with rotate/execute/grab/rewind semantics |
 | ACTION7 undo | no | 6 games |
 | click-only manipulation | partly (click toggles a tile) | rotation rings, rotate-subtree, sliders, drag-to-cell, attraction, program bits — 7 games |
 | reach goal | yes | goal conditioned on state |
 | all-on-targets | yes (push boxes) | target matching by size/colour/identity |
-| picture / sequence / count wins | no | cd82, re86, ar25, cn04, tr87, sk48, sb26, tn36, ft09, su15 — 10 games |
+| picture wins | yes (`sample_match`): canvas equals target, colour-cycle clicks with lights-out stencils | sequence and count wins (tr87, sk48, sb26, tn36, su15) |
 | doors, switches, keys, collect | yes | switches that are *stood on* by a second actor (g50t echo, m0r0) |
 | hazards, patrols, chase | yes | path-finding allies/adversaries, followers, bouncing drifters, fuses |
 | gravity | yes (tiles fall) | side-view avatar physics, flow, attraction, conservation |
@@ -421,12 +421,12 @@ ones.
    evaluates on the 23 public games held out, so `evaluation/episode_return`
    is a benchmark score. Open: `k_l` is measured on two games; unverified
    levels get a budget-derived baseline.
-3. **New primitives in the tile interpreter**, in the order of §3: selection
-   as a first-class object with ACTION5 semantics, win predicates
-   (target picture, sequence, exact counts), avatar state and
-   state-conditioned goals, HUD and budget in the frame, hidden information
-   (fog, reveal-on-enter), path-finding actors, undo on a random subset of
-   games, animation frames.
+3. **New primitives in the tile interpreter**, in the order of §3:
+   ~~selection as a first-class object~~ and ~~target-picture wins~~ (both
+   2026-09-02, as the `select` and `match` families), then sequence and
+   count wins, avatar state and state-conditioned goals, ~~HUD and budget
+   in the frame~~, hidden information (fog, reveal-on-enter), path-finding
+   actors, undo on a random subset of games, animation frames.
 4. **A click-manipulation interpreter family** (rings, rotate-subtree,
    sliders, attraction/merge) — the largest uncovered block of the public
    set and the least shared code.
