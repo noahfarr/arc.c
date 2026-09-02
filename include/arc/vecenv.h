@@ -39,10 +39,14 @@ struct arc_vec_env *arc_vecenv_new_pool(const struct arc_game_spec *pool,
 					int32_t num_threads, uint64_t seed);
 void arc_vecenv_set_packed(struct arc_vec_env *vec, int32_t packed);
 /* ARC_REWARD_LEVELS: +1 per level (the default). ARC_REWARD_RHAE: on
- * completing level l of n, w_l * min(1, (baseline_l / actions_l)^2) with
- * w_l = l / (1 + ... + n), the benchmark's own scoring; a game without a
- * baseline falls back to +w_l. With cap > 0 a level that runs past
- * cap * baseline_l actions is lost, as the benchmark terminates it. */
+ * completing level l, l * min(1, (baseline_l / actions_l)^2): the
+ * benchmark's per-level score in level units, so level 1 at human
+ * efficiency is worth exactly 1 and later levels more, as the benchmark
+ * weights them. Dividing by 1 + ... + n gives the benchmark's game score;
+ * that is left to the caller so the learner sees the same unit in every
+ * game. A game without a baseline falls back to +l. With cap > 0 a level
+ * that runs past cap * baseline_l actions is lost, as the benchmark
+ * terminates it. */
 void arc_vecenv_set_reward(struct arc_vec_env *vec, int32_t mode, float cap);
 /* Potential-based shaping from the distance tables: each step adds
  * weight * w_l * (phi(s') - phi(s)) with phi(s) = -dist(s) / dist(start),

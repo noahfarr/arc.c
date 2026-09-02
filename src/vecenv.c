@@ -184,7 +184,7 @@ static float shape_reward(struct arc_vec_env *vec, int32_t i,
 	if (vec->reward_mode == ARC_REWARD_LEVELS)
 		return (float)reward_i;
 	if (reward_i > 0) {
-		float w = level_weight(g, before_level);
+		float w = (float)(before_level + 1);
 		float r = w;
 
 		if (baseline && baseline[before_level] > 0) {

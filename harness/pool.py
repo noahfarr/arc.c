@@ -81,6 +81,7 @@ class Pool:
         self.library = library or Library()
         self.lib = signatures(self.library.lib)
         self._keep = []
+        self.num_levels: list[int] = []
         humans = human_baselines() if reward == REWARD_RHAE else {}
 
         specs = (Spec * len(games))()
@@ -90,6 +91,7 @@ class Pool:
                 continue
             _, proto = differ.build(game, self.library)
             self._keep.append(proto)
+            self.num_levels.append(int(proto.levels.num_levels))
             kind = type(proto._aux)
             auxes = (kind * num_envs)()
             self._keep.append(auxes)
@@ -136,6 +138,7 @@ class Pool:
         from .dsl import DslNative
 
         spec, labels = load(path)
+        self.num_levels.append(int(spec.num_levels))
         native = DslNative(spec, self.library)
         self._keep.append(native)
         auxes = (native.aux_t * num_envs)()
