@@ -31,7 +31,10 @@ def _actions_for(game) -> list[tuple[int, int, int]]:
                     out.append((6, cx, cy))
         return out
 
-    out = [(a, 0, 0) for a in (1, 2, 3, 4)]
+    out = [(a, 0, 0) for a in spec.simple_actions]
+    # Selectable objects move, so their cells cannot be enumerated from the
+    # layout; ACTION5 cycles the selection instead and stands in for those
+    # clicks in the search.
     clickable = {i for i, k in enumerate(spec.kinds) if k.on_click}
     clickable |= {r.subject for r in spec.rules
                   if r.trigger == ON_CLICK and r.enabled}

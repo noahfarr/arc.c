@@ -78,6 +78,8 @@ static void load_level(struct arc_game *game)
 	}
 	aux->settled = 0;
 	aux->steps = s->budget ? s->budget[level] : 0;
+	aux->sel_x = -1;
+	aux->sel_y = -1;
 }
 
 static int won(const struct arc_game *game)
@@ -100,9 +102,39 @@ static int won(const struct arc_game *game)
 		return 1;
 	}
 	if (s->win_mode == ARC_DSL_WIN_REACH)
-		return aux->floor[idx(s, aux->player_x, aux->player_y)] ==
-		       (int8_t)s->win_a;
+		return aux->player_x >= 0 &&
+		       aux->floor[idx(s, aux->player_x, aux->player_y)] ==
+			       (int8_t)s->win_a;
+	if (s->win_mode == ARC_DSL_WIN_MATCH) {
+		/* Compared by colour, so the target can use its own kinds
+		 * (unclickable) that look like the canvas kinds. */
+		for (int32_t v = 0; v < s->match_h; v++)
+			for (int32_t u = 0; u < s->match_w; u++) {
+				int8_t a = aux->grid[idx(s, s->match_x0 + u, s->match_y0 + v)];
+				int8_t b = aux->grid[idx(s, s->match_x1 + u, s->match_y1 + v)];
+				int8_t ca = a < 0 ? s->background : s->kinds[a].color;
+				int8_t cb = b < 0 ? s->background : s->kinds[b].color;
+
+				if (ca != cb)
+					return 0;
+			}
+		return 1;
+	}
 	return 0;
+}
+
+/* Advance one cell through the cycle a..b, if it is in it. */
+static void cycle_cell(const struct arc_dsl_spec *s, struct arc_dsl_aux *aux,
+		       int32_t x, int32_t y, int8_t a, int8_t b)
+{
+	int8_t k;
+
+	if (!inside(s, x, y))
+		return;
+	k = aux->grid[idx(s, x, y)];
+	if (k < a || k > b)
+		return;
+	aux->grid[idx(s, x, y)] = k == b ? a : (int8_t)(k + 1);
 }
 
 static void apply(struct arc_game *game, int32_t cx, int32_t cy, uint8_t effect,
@@ -130,6 +162,25 @@ static void apply(struct arc_game *game, int32_t cx, int32_t cy, uint8_t effect,
 				aux->grid[i] = a;
 		}
 		break;
+	case ARC_DSL_CYCLE: {
+		int8_t here = aux->grid[idx(s, cx, cy)];
+		uint8_t stencil = here >= 0 ? s->kinds[here].stencil : 0;
+
+		cycle_cell(s, aux, cx, cy, a, b);
+		if (stencil >= ARC_DSL_STENCIL_CROSS) {
+			cycle_cell(s, aux, cx - 1, cy, a, b);
+			cycle_cell(s, aux, cx + 1, cy, a, b);
+			cycle_cell(s, aux, cx, cy - 1, a, b);
+			cycle_cell(s, aux, cx, cy + 1, a, b);
+		}
+		if (stencil == ARC_DSL_STENCIL_BLOCK) {
+			cycle_cell(s, aux, cx - 1, cy - 1, a, b);
+			cycle_cell(s, aux, cx + 1, cy - 1, a, b);
+			cycle_cell(s, aux, cx - 1, cy + 1, a, b);
+			cycle_cell(s, aux, cx + 1, cy + 1, a, b);
+		}
+		break;
+	}
 	case ARC_DSL_WIN:
 		arc_game_next_level(game);
 		break;
@@ -200,15 +251,65 @@ static void fire_rules(struct arc_game *game, uint8_t trigger, int8_t subject,
 	}
 }
 
+/* Move the selected object one cell; it is blocked by anything solid and
+ * pushes nothing. Stepping onto a floor tile fires nothing: selection
+ * games win by arrangement (ARC_DSL_WIN_ALL_ON / MATCH). */
+static void move_selected(struct arc_game *game, int32_t dir)
+{
+	const struct arc_dsl_spec *s = spec_of(game);
+	struct arc_dsl_aux *aux = (struct arc_dsl_aux *)game->aux;
+	int32_t nx, ny;
+	int8_t kind;
+
+	if (aux->sel_x < 0)
+		return;
+	nx = aux->sel_x + DX[dir];
+	ny = aux->sel_y + DY[dir];
+	if (!inside(s, nx, ny) || aux->grid[idx(s, nx, ny)] != ARC_DSL_EMPTY)
+		return;
+	kind = aux->grid[idx(s, aux->sel_x, aux->sel_y)];
+	aux->grid[idx(s, aux->sel_x, aux->sel_y)] = ARC_DSL_EMPTY;
+	aux->grid[idx(s, nx, ny)] = kind;
+	aux->sel_x = nx;
+	aux->sel_y = ny;
+}
+
+/* Select the next selectable object in scan order after the current one. */
+static void cycle_selection(struct arc_game *game)
+{
+	const struct arc_dsl_spec *s = spec_of(game);
+	struct arc_dsl_aux *aux = (struct arc_dsl_aux *)game->aux;
+	int32_t n = s->grid_w * s->grid_h;
+	int32_t start = aux->sel_x < 0 ? -1 : idx(s, aux->sel_x, aux->sel_y);
+
+	for (int32_t step = 1; step <= n; step++) {
+		int32_t i = (start + step) % n;
+		int8_t k = aux->grid[i];
+
+		if (k >= 0 && s->kinds[k].selectable) {
+			aux->sel_x = i % s->grid_w;
+			aux->sel_y = i / s->grid_w;
+			return;
+		}
+	}
+}
+
 static void try_move(struct arc_game *game, int32_t dir)
 {
 	const struct arc_dsl_spec *s = spec_of(game);
 	struct arc_dsl_aux *aux = (struct arc_dsl_aux *)game->aux;
-	int32_t nx = aux->player_x + DX[dir];
-	int32_t ny = aux->player_y + DY[dir];
+	int32_t nx, ny;
 	int blocked = 0;
 	int8_t target;
 
+	if (s->control == ARC_DSL_CONTROL_SELECT) {
+		move_selected(game, dir);
+		return;
+	}
+	if (aux->player_x < 0)
+		return;
+	nx = aux->player_x + DX[dir];
+	ny = aux->player_y + DY[dir];
 	if (!inside(s, nx, ny))
 		return;
 	target = aux->grid[idx(s, nx, ny)];
@@ -258,6 +359,10 @@ static void do_click(struct arc_game *game, int32_t ax, int32_t ay)
 	target = aux->grid[idx(s, cx, cy)];
 	if (target == ARC_DSL_EMPTY)
 		return;
+	if (s->kinds[target].selectable) {
+		aux->sel_x = cx;
+		aux->sel_y = cy;
+	}
 	apply(game, cx, cy, s->kinds[target].on_click, s->kinds[target].click_a,
 	      s->kinds[target].click_b, &blocked);
 	fire_rules(game, ARC_DSL_ON_CLICK, target, cx, cy, &blocked);
@@ -333,6 +438,9 @@ static void move_actors(struct arc_game *game)
 				continue;
 			if (s->kinds[kind].motion == ARC_DSL_STATIC)
 				continue;
+			if (s->kinds[kind].motion != ARC_DSL_PATROL &&
+			    aux->player_x < 0)
+				continue;
 			step_actor(game, x, y, kind, moved);
 		}
 	}
@@ -386,6 +494,11 @@ static void dsl_on_set_level(struct arc_game *game)
 	load_level(game);
 }
 
+static int s_uses5(const struct arc_game *game)
+{
+	return spec_of(game)->uses_action5;
+}
+
 static void dsl_step_once(struct arc_game *game)
 {
 	struct arc_engine_state *e = &game->engine;
@@ -404,6 +517,8 @@ static void dsl_step_once(struct arc_game *game)
 
 	if (id >= ARC_ACTION1 && id <= ARC_ACTION4)
 		try_move(game, id - ARC_ACTION1);
+	else if (id == ARC_ACTION5 && s_uses5(game))
+		cycle_selection(game);
 	else if (id == ARC_ACTION6)
 		do_click(game, e->action_x, e->action_y);
 	if (id != ARC_ACTION_RESET && aux->steps > 0)
@@ -517,6 +632,22 @@ static void dsl_render_interface(struct arc_game *game, int8_t *frame)
 			if (kind != ARC_DSL_EMPTY)
 				paint(s, frame, x, y, kind, 1);
 		}
+	if (aux->sel_x >= 0) {
+		/* A one-pixel ring around the selected cell. */
+		int32_t x0 = s->origin_x + aux->sel_x * s->pitch;
+		int32_t y0 = s->origin_y + aux->sel_y * s->pitch;
+
+		for (int32_t k = 0; k < s->pitch; k++) {
+			int32_t xs[4] = { x0 + k, x0 + k, x0, x0 + s->pitch - 1 };
+			int32_t ys[4] = { y0, y0 + s->pitch - 1, y0 + k, y0 + k };
+
+			for (int32_t j = 0; j < 4; j++)
+				if (xs[j] >= 0 && xs[j] < ARC_FRAME_SIZE &&
+				    ys[j] >= 0 && ys[j] < ARC_FRAME_SIZE)
+					frame[ys[j] * ARC_FRAME_SIZE + xs[j]] =
+						s->select_color;
+		}
+	}
 	paint_hud(s, aux, game->engine.level_index, frame);
 }
 

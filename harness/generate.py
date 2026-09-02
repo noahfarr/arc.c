@@ -618,6 +618,204 @@ def sample_rooms(rng, levels=6, library=None, aux_size=None,
                                "levels": meta, "stage": stage})
 
 
+def _pad(layouts, floors, fill=EMPTY):
+    h = max(o.shape[0] for o in layouts)
+    w = max(o.shape[1] for o in layouts)
+    outs, flrs = [], []
+    for obj, flr in zip(layouts, floors):
+        o = np.full((h, w), fill, np.int8)
+        f = np.full((h, w), EMPTY, np.int8)
+        oy, ox = (h - obj.shape[0]) // 2, (w - obj.shape[1]) // 2
+        o[oy:oy + obj.shape[0], ox:ox + obj.shape[1]] = obj
+        f[oy:oy + obj.shape[0], ox:ox + obj.shape[1]] = flr
+        outs.append(o)
+        flrs.append(f)
+    return np.stack(outs), np.stack(flrs), w, h
+
+
+def _geometry(w, h):
+    pitch = int(max(1, min(62 // max(w, h), 8)))
+    return pitch, (64 - w * pitch) // 2, (62 - h * pitch) // 2
+
+
+# (blocks, side, walls, decoys) per level of the selection family
+SELECT_LADDER = [(1, 8, 0.04, 0), (1, 10, 0.06, 1), (2, 10, 0.08, 1),
+                 (2, 12, 0.08, 2), (3, 12, 0.10, 2), (3, 14, 0.10, 3),
+                 (4, 14, 0.10, 3), (4, 16, 0.12, 4)]
+
+
+def sample_select(rng, levels=6, library=None, aux_size=None,
+                  max_nodes=40_000, attempts=30, stage=2):
+    """Selection family (the cn04 / ka59 / sk48 control scheme): no avatar.
+    A click, or ACTION5, selects a block; the arrows slide it; every block
+    must end on a goal tile. Blocks never push and walls stop them."""
+    from .dsl import CONTROL_SELECT, Spec, WIN_ALL_ON
+
+    swatch = [int(c) for c in rng.permutation(PALETTE)[:6]]
+    floor_k, wall_k, ghost_k, block_k, goal_k, decoy_k = range(6)
+    kinds = [Kind(color=swatch[0]), Kind(color=swatch[1], on_enter=BLOCK),
+             Kind(color=swatch[2]),  # never placed: stands in for the player
+             Kind(color=swatch[3], selectable=1), Kind(color=swatch[4]),
+             Kind(color=swatch[5])]
+    bands = STAGE_BANDS[stage]
+    layouts, floors, budgets, meta = [], [], [], []
+    for i in range(levels):
+        blocks, side, walls, decoys = SELECT_LADDER[min(i, len(SELECT_LADDER) - 1)]
+        side = max(6, min(20, side + {0: -3, 1: -1, 2: 6}[stage]))
+        lo, hi = bands[min(i, len(bands) - 1)]
+        chosen = None
+        for _ in range(attempts):
+            obj = np.full((side, side), EMPTY, np.int8)
+            flr = np.full((side, side), EMPTY, np.int8)
+            obj[0, :] = obj[-1, :] = obj[:, 0] = obj[:, -1] = wall_k
+            cells = [(y, x) for y in range(1, side - 1) for x in range(1, side - 1)]
+            rng.shuffle(cells)
+            n_walls = int(len(cells) * walls)
+            for y, x in cells[:n_walls]:
+                obj[y, x] = wall_k
+            free = cells[n_walls:]
+            if len(free) < 2 * blocks + decoys + 2:
+                continue
+            for k in range(blocks):
+                flr[free[k]] = goal_k
+            # blocks far from the goals, so sliding them is the level
+            rest = free[blocks:]
+            rest.sort(key=lambda c: -min(abs(c[0] - g[0]) + abs(c[1] - g[1])
+                                        for g in free[:blocks]))
+            far = rest[:max(blocks, len(rest) // 3)]
+            rng.shuffle(far)
+            for k in range(blocks):
+                obj[far[k]] = block_k
+            for k in range(decoys):
+                c = far[blocks + k] if blocks + k < len(far) else None
+                if c is not None:
+                    obj[c] = decoy_k
+            one = Spec(kinds=kinds, layouts=obj[None], floors=flr[None],
+                       player_kind=ghost_k, win_mode=WIN_ALL_ON, win_a=block_k,
+                       win_b=goal_k, pitch=1, control=CONTROL_SELECT,
+                       uses_action5=1)
+            shortest, exhausted = None, False
+            if library is not None:
+                shortest, exhausted = _shortest(one, 0, library, aux_size,
+                                                max_nodes)
+                if shortest is None and exhausted:
+                    continue
+                if shortest is not None and not (lo <= shortest <= hi):
+                    continue
+            chosen = (obj, flr, shortest)
+            break
+        if chosen is None:
+            return None
+        obj, flr, shortest = chosen
+        layouts.append(obj)
+        floors.append(flr)
+        base = shortest if shortest is not None else 3 * blocks * side // 2
+        budgets.append(int(round(base * rng.uniform(*BUDGET_RANGE))))
+        meta.append({"blocks": blocks, "side": side, "shortest": shortest})
+    L, F, w, h = _pad(layouts, floors)
+    pitch, ox, oy = _geometry(w, h)
+    spec = Spec(kinds=kinds, layouts=L, floors=F, player_kind=ghost_k,
+                win_mode=WIN_ALL_ON, win_a=block_k, win_b=goal_k, pitch=pitch,
+                origin_x=ox, origin_y=oy, control=CONTROL_SELECT,
+                uses_action5=1, budgets=np.array(budgets, np.int32))
+    return Proposal(spec=spec, seed=0, mechanics={"levels": meta, "stage": stage})
+
+
+# Canvas size, colour count and stencil of the match family are drawn once
+# per game: one spec has one set of kinds, and the cycle must only visit
+# colours the target uses or the search space explodes. Scramble clicks
+# per level follow the stage's length bands.
+MATCH_SIDES = {0: (3, 4), 1: (4, 5), 2: (5, 7)}
+MATCH_COLOURS = {0: (2, 2), 1: (2, 3), 2: (3, 4)}
+
+
+def sample_match(rng, levels=6, library=None, aux_size=None,
+                 max_nodes=40_000, attempts=20, stage=2):
+    """Picture-match family (the ft09 / cd82 / re86 goal): a canvas on the
+    left, a target on the right. Clicking a canvas cell cycles its colour;
+    with a stencil (per game) the neighbours cycle too, lights-out style.
+    Levels are made backwards by scrambling the target with random clicks,
+    so the optimum is at most the number of scramble clicks."""
+    from .dsl import CYCLE, STENCIL_BLOCK, STENCIL_CROSS, Spec, WIN_MATCH
+
+    swatch = [int(c) for c in rng.permutation(PALETTE)[:7]]
+    floor_k, wall_k, ghost_k = 0, 1, 2
+    kinds = [Kind(color=swatch[0]), Kind(color=swatch[1], on_enter=BLOCK),
+             Kind(color=swatch[2])]
+    lo_side, hi_side = MATCH_SIDES[stage]
+    side = int(rng.integers(lo_side, hi_side + 1))
+    colours = int(rng.integers(MATCH_COLOURS[stage][0], MATCH_COLOURS[stage][1] + 1))
+    stencil = int(rng.choice([0, 0, 1, 2] if stage == 2 else [0, 1]))
+    canvas_k = len(kinds)
+    for c in range(colours):
+        kinds.append(Kind(color=swatch[3 + c], on_click=CYCLE, click_a=canvas_k,
+                          click_b=canvas_k + colours - 1, stencil=stencil))
+    target_k = len(kinds)
+    for c in range(colours):
+        kinds.append(Kind(color=swatch[3 + c]))
+    w, h = 2 * side + 3, side + 2
+    match = (1, 1, side + 2, 1, side, side)
+    bands = STAGE_BANDS[stage]
+    layouts, floors, budgets, meta = [], [], [], []
+    capacity = side * side * (colours - 1)
+    for i in range(levels):
+        ncol = colours
+        lo, hi = bands[min(i, len(bands) - 1)]
+        chosen = None
+        for _ in range(attempts):
+            # Scramble with about as many clicks as the band asks for;
+            # cancelling clicks make the optimum shorter, which the search
+            # catches when it can finish.
+            scramble = int(min(capacity, rng.integers(lo, hi + 1)))
+            obj = np.full((h, w), wall_k, np.int8)
+            flr = np.full((h, w), EMPTY, np.int8)
+            target = rng.integers(0, ncol, (side, side))
+            canvas = target.copy()
+            for _ in range(scramble):
+                y, x = rng.integers(0, side, 2)
+                cells = [(y, x)]
+                if stencil >= STENCIL_CROSS:
+                    cells += [(y - 1, x), (y + 1, x), (y, x - 1), (y, x + 1)]
+                if stencil == STENCIL_BLOCK:
+                    cells += [(y - 1, x - 1), (y + 1, x - 1), (y - 1, x + 1), (y + 1, x + 1)]
+                for cy, cx in cells:
+                    if 0 <= cy < side and 0 <= cx < side:
+                        canvas[cy, cx] = (canvas[cy, cx] + 1) % ncol
+            if np.array_equal(canvas, target):
+                continue
+            obj[1:1 + side, 1:1 + side] = canvas_k + canvas
+            obj[1:1 + side, side + 2:2 * side + 2] = target_k + target
+            one = Spec(kinds=kinds, layouts=obj[None], floors=flr[None],
+                       player_kind=ghost_k, win_mode=WIN_MATCH, pitch=1,
+                       match=match)
+            shortest, exhausted = None, False
+            if library is not None:
+                shortest, exhausted = _shortest(one, 0, library, aux_size,
+                                                max_nodes)
+                if shortest is None and exhausted:
+                    continue
+                if shortest is not None and not (lo <= shortest <= hi):
+                    continue
+            chosen = (obj, flr, shortest)
+            break
+        if chosen is None:
+            return None
+        obj, flr, shortest = chosen
+        layouts.append(obj)
+        floors.append(flr)
+        base = shortest if shortest is not None else scramble
+        budgets.append(int(round(base * rng.uniform(*BUDGET_RANGE))))
+        meta.append({"side": side, "colours": ncol, "stencil": stencil,
+                     "scramble": scramble, "shortest": shortest})
+    L = np.stack(layouts)
+    F = np.stack(floors)
+    pitch, gx, gy = _geometry(w, h)
+    spec = Spec(kinds=kinds, layouts=L, floors=F, player_kind=ghost_k,
+                win_mode=WIN_MATCH, pitch=pitch, origin_x=gx, origin_y=gy,
+                match=match, budgets=np.array(budgets, np.int32))
+    return Proposal(spec=spec, seed=0, mechanics={"levels": meta, "stage": stage})
+
+
 def sample_verified(rng, aux_size, library=None, attempts=12, **kwargs):
     import ctypes
     import dataclasses

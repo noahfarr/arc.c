@@ -20,10 +20,27 @@ enum {
 	ARC_DSL_BECOME,
 	ARC_DSL_TOGGLE,
 	ARC_DSL_WIN,
-	ARC_DSL_LOSE
+	ARC_DSL_LOSE,
+	/* Cycle the cell's kind through effect_a .. effect_b; the kind's
+	 * stencil says which neighbours cycle with it. */
+	ARC_DSL_CYCLE
 };
 
-enum { ARC_DSL_WIN_NONE_LEFT = 0, ARC_DSL_WIN_ALL_ON, ARC_DSL_WIN_REACH };
+enum {
+	ARC_DSL_WIN_NONE_LEFT = 0,
+	ARC_DSL_WIN_ALL_ON,
+	ARC_DSL_WIN_REACH,
+	/* The canvas rectangle equals the target rectangle, kind for kind. */
+	ARC_DSL_WIN_MATCH
+};
+
+/* What the arrow keys drive: the player kind, or whichever selectable
+ * object was last clicked (or cycled to with ACTION5). */
+enum { ARC_DSL_CONTROL_AVATAR = 0, ARC_DSL_CONTROL_SELECT };
+
+/* Stencils for ARC_DSL_CYCLE: the cell alone, the cell and its four
+ * neighbours, or the full 3x3 block. */
+enum { ARC_DSL_STENCIL_CELL = 0, ARC_DSL_STENCIL_CROSS, ARC_DSL_STENCIL_BLOCK };
 
 enum { ARC_DSL_ON_ENTER = 0, ARC_DSL_ON_CLICK, ARC_DSL_ON_STEP };
 
@@ -75,6 +92,8 @@ struct arc_dsl_kind {
 	uint8_t on_click;
 	int8_t click_a;
 	int8_t click_b;
+	uint8_t selectable;
+	uint8_t stencil;
 };
 
 struct arc_dsl_spec {
@@ -93,6 +112,17 @@ struct arc_dsl_spec {
 	int32_t hud;
 	int8_t hud_on;
 	int8_t hud_off;
+	int32_t control;
+	int32_t uses_action5;
+	int8_t select_color;
+	/* ARC_DSL_WIN_MATCH: canvas at (match_x0, match_y0), target at
+	 * (match_x1, match_y1), both match_w x match_h. */
+	int32_t match_x0;
+	int32_t match_y0;
+	int32_t match_x1;
+	int32_t match_y1;
+	int32_t match_w;
+	int32_t match_h;
 	int32_t num_rules;
 	struct arc_dsl_rule rules[ARC_DSL_MAX_RULES];
 	struct arc_dsl_kind kinds[ARC_DSL_MAX_KINDS];
@@ -110,6 +140,8 @@ struct arc_dsl_aux {
 	uint8_t phase;
 	int32_t ticks;
 	int32_t steps;
+	int32_t sel_x;
+	int32_t sel_y;
 };
 
 extern const struct arc_hooks arc_dsl_hooks;

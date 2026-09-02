@@ -7,8 +7,10 @@ from .clib import Library
 from .reference import Levels
 
 MAX_KINDS = 16
-NONE, BLOCK, REMOVE, PUSH, BECOME, TOGGLE, WIN, LOSE = range(8)
-WIN_NONE_LEFT, WIN_ALL_ON, WIN_REACH = range(3)
+NONE, BLOCK, REMOVE, PUSH, BECOME, TOGGLE, WIN, LOSE, CYCLE = range(9)
+WIN_NONE_LEFT, WIN_ALL_ON, WIN_REACH, WIN_MATCH = range(4)
+CONTROL_AVATAR, CONTROL_SELECT = range(2)
+STENCIL_CELL, STENCIL_CROSS, STENCIL_BLOCK = range(3)
 ON_ENTER, ON_CLICK, ON_STEP = range(3)
 ALWAYS, IF_COUNT_LE, IF_NONE_LEFT, IF_ADJACENT = range(4)
 MAX_RULES = 8
@@ -49,6 +51,14 @@ class Kind:
     on_click: int = NONE
     click_a: int = -1
     click_b: int = -1
+    selectable: int = 0
+    stencil: int = STENCIL_CELL
+
+    def packed(self) -> list[int]:
+        return [self.color, self.motion, self.motion_a, self.motion_b,
+                self.deadly, self.gravity, self.size, self.off_x, self.off_y,
+                self.on_enter, self.enter_a, self.enter_b, self.on_click,
+                self.click_a, self.click_b, self.selectable, self.stencil]
 
 
 @dataclasses.dataclass
@@ -69,6 +79,15 @@ class Spec:
     hud: int = HUD_BOTTOM
     hud_on: int = 12
     hud_off: int = 11
+    control: int = CONTROL_AVATAR
+    uses_action5: int = 0
+    select_color: int = 15
+    # WIN_MATCH rectangles: canvas (x0, y0) must equal target (x1, y1).
+    match: tuple = (0, 0, 0, 0, 0, 0)
+
+    @property
+    def simple_actions(self) -> list[int]:
+        return [1, 2, 3, 4, 5] if self.uses_action5 else [1, 2, 3, 4]
 
     @property
     def num_levels(self) -> int:
@@ -117,6 +136,11 @@ class DslNative:
         native.hud = spec.hud
         native.hud_on = spec.hud_on
         native.hud_off = spec.hud_off
+        native.control = spec.control
+        native.uses_action5 = spec.uses_action5
+        native.select_color = spec.select_color
+        (native.match_x0, native.match_y0, native.match_x1, native.match_y1,
+         native.match_w, native.match_h) = [int(v) for v in spec.match]
         rule_t = h.struct("arc_dsl_rule")
         native.num_rules = len(spec.rules)
         for i, r in enumerate(spec.rules):
@@ -124,11 +148,7 @@ class DslNative:
                                      r.pred_a, r.pred_b, r.effect, r.effect_a,
                                      r.effect_b, r.enabled)
         for i, k in enumerate(spec.kinds):
-            native.kinds[i] = kind_t(k.color, k.motion, k.motion_a,
-                                     k.motion_b, k.deadly, k.gravity,
-                                     k.size, k.off_x, k.off_y, k.on_enter,
-                                     k.enter_a, k.enter_b, k.on_click,
-                                     k.click_a, k.click_b)
+            native.kinds[i] = kind_t(*k.packed())
         native.layout = layout.ctypes.data_as(ctypes.POINTER(ctypes.c_int8))
         native.floor = floor.ctypes.data_as(ctypes.POINTER(ctypes.c_int8))
         if spec.budgets is None:
@@ -143,7 +163,7 @@ class DslNative:
 
         self.levels = self._blank_levels()
         self.level_data = self._level_data()
-        self.simple = np.ascontiguousarray([1, 2, 3, 4], np.int32)
+        self.simple = np.ascontiguousarray(spec.simple_actions, np.int32)
         self._keep.append(self.simple)
         self.hooks = ctypes.c_void_p.in_dll(library.lib, "arc_dsl_hooks")
 
@@ -163,7 +183,7 @@ class DslNative:
             grid_size=np.tile(np.array([64, 64], np.int32), (n, 1)),
             names=[[""] for _ in range(n)], level_data=[{} for _ in range(n)],
             background=self.spec.background, letter_box=0,
-            win_score=n, available_actions=[1, 2, 3, 4, 6],
+            win_score=n, available_actions=self.spec.simple_actions + [6],
         )
 
     def _level_data(self):
@@ -200,7 +220,7 @@ class DslGame:
             ctypes.byref(self._native.level_data),
             ctypes.addressof(self._native.hooks),
             ctypes.byref(aux), ctypes.byref(self._native.native),
-            simple.ctypes.data_as(ctypes.c_void_p), 4, 1, max_frames,
+            simple.ctypes.data_as(ctypes.c_void_p), len(simple), 1, max_frames,
         )
         self.max_frames = max_frames
         self.frames = np.zeros((max_frames, 64, 64), np.int8)

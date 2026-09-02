@@ -23,15 +23,12 @@ def save(spec: Spec, labels: dict, path: Path, distances=None) -> None:
         dist_hash=(np.concatenate(hashes) if hashes else np.zeros(0, np.uint64)),
         dist_val=(np.concatenate(dists) if dists else np.zeros(0, np.int32)),
         dist_offset=np.array(offsets, np.int32),
-        kinds=np.array([[k.color, k.motion, k.motion_a, k.motion_b, k.deadly,
-                         k.gravity, k.size, k.off_x, k.off_y, k.on_enter,
-                         k.enter_a, k.enter_b, k.on_click, k.click_a,
-                         k.click_b]
-                        for k in spec.kinds], np.int32),
+        kinds=np.array([k.packed() for k in spec.kinds], np.int32),
         params=np.array([spec.player_kind, spec.win_mode, spec.win_a,
                          spec.win_b, spec.pitch, spec.origin_x, spec.origin_y,
-                         spec.background, spec.hud, spec.hud_on, spec.hud_off],
-                        np.int32),
+                         spec.background, spec.hud, spec.hud_on, spec.hud_off,
+                         spec.control, spec.uses_action5, spec.select_color,
+                         *spec.match], np.int32),
         rules=np.array([[r.trigger, r.subject, r.effect, r.predicate,
                          r.pred_a, r.pred_b, r.effect_a, r.effect_b,
                          r.enabled] for r in spec.rules], np.int32
@@ -48,6 +45,10 @@ def load(path: Path) -> tuple[Spec, dict]:
         extra = {}
         if len(p) > 8:
             extra = dict(hud=int(p[8]), hud_on=int(p[9]), hud_off=int(p[10]))
+        if len(p) > 11:
+            extra.update(control=int(p[11]), uses_action5=int(p[12]),
+                         select_color=int(p[13]),
+                         match=tuple(int(v) for v in p[14:20]))
         rules = [Rule(*[int(v) for v in row]) for row in z["rules"]] \
             if "rules" in z else []
         budgets = z["budgets"] if "budgets" in z else None
@@ -64,7 +65,7 @@ def load(path: Path) -> tuple[Spec, dict]:
     return spec, labels
 
 
-FAMILIES = ("sokoban", "rooms")
+FAMILIES = ("sokoban", "rooms", "select", "match")
 
 
 def _rekey(spec, level, library, aux_size, max_nodes):
@@ -118,12 +119,14 @@ def build(count: int, out: Path, seed: int = 0, trials: int = 10_000,
 
     from .clib import Library
     from .dsl import DslGame
-    from .generate import STAGE_RANDOM_BAR, sample_rooms
+    from .generate import (STAGE_RANDOM_BAR, sample_match, sample_rooms,
+                           sample_select)
     from .validate import distance_table
 
     library = library or Library()
     aux_size = ctypes.sizeof(library.headers.struct("arc_dsl_aux"))
-    samplers = {"sokoban": sample_environment, "rooms": sample_rooms}
+    samplers = {"sokoban": sample_environment, "rooms": sample_rooms,
+                "select": sample_select, "match": sample_match}
     rng = np.random.default_rng(seed)
     out = Path(out)
     manifest = []
