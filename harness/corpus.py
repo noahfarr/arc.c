@@ -136,8 +136,11 @@ def build(count: int, out: Path, seed: int = 0, trials: int = 10_000,
         attempts += 1
         family = families[attempts % len(families)]
         stage = stages[(attempts // len(families)) % len(stages)]
+        # The match family's search branches over every canvas cell; keep
+        # it short and let scramble counts stand in for the optimum.
+        nodes = 5_000 if family == "match" else 40_000
         proposal = samplers[family](rng, library=library, aux_size=aux_size,
-                                    stage=stage)
+                                    stage=stage, max_nodes=nodes)
         if proposal is None:
             continue
         spec = proposal.spec

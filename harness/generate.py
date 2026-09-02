@@ -639,9 +639,11 @@ def _geometry(w, h):
 
 
 # (blocks, side, walls, decoys) per level of the selection family
-SELECT_LADDER = [(1, 8, 0.04, 0), (1, 10, 0.06, 1), (2, 10, 0.08, 1),
-                 (2, 12, 0.08, 2), (3, 12, 0.10, 2), (3, 14, 0.10, 3),
-                 (4, 14, 0.10, 3), (4, 16, 0.12, 4)]
+# A single block is random-solvable on any board, so only the tutorial
+# level has one.
+SELECT_LADDER = [(1, 8, 0.04, 0), (2, 10, 0.08, 1), (2, 12, 0.10, 1),
+                 (3, 12, 0.10, 2), (3, 14, 0.12, 2), (4, 14, 0.12, 3),
+                 (4, 16, 0.12, 3), (5, 16, 0.12, 4)]
 
 
 def sample_select(rng, levels=6, library=None, aux_size=None,
