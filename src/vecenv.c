@@ -39,6 +39,9 @@ struct arc_vec_env {
 	int32_t num_threads;
 	int32_t horizon;
 	int32_t *elapsed;
+	int32_t *level_actions;
+	int32_t reward_mode;
+	float cap;
 	pthread_t *threads;
 	struct slot *slots;
 	pthread_mutex_t lock;
@@ -98,6 +101,46 @@ static void restart(struct arc_vec_env *vec, int32_t i, struct slot *owner)
 		assign(vec, i, draw(vec, i), owner);
 	arc_game_init(vec->games[i]);
 	vec->elapsed[i] = 0;
+	vec->level_actions[i] = 0;
+}
+
+static float level_weight(const struct arc_game *g, int32_t level)
+{
+	int32_t n = g->levels->num_levels;
+	return (float)(level + 1) / (float)(n * (n + 1) / 2);
+}
+
+/* Reward for the step that just happened, given the level before it and
+ * the score delta; also applies the action cap. */
+static float shape_reward(struct arc_vec_env *vec, int32_t i,
+			  struct arc_game *g, int32_t before_level,
+			  int32_t reward_i, uint8_t *term)
+{
+	const int32_t *baseline = vec->pool[vec->task[i]].baseline;
+	int32_t actions = ++vec->level_actions[i];
+
+	if (vec->reward_mode == ARC_REWARD_LEVELS)
+		return (float)reward_i;
+	if (reward_i > 0) {
+		float w = level_weight(g, before_level);
+		float r = w;
+
+		if (baseline && baseline[before_level] > 0) {
+			float e = (float)baseline[before_level] / (float)actions;
+			if (e > 1.0f)
+				e = 1.0f;
+			r = w * e * e;
+		}
+		vec->level_actions[i] = 0;
+		return r;
+	}
+	if (vec->cap > 0.0f && baseline && baseline[before_level] > 0 &&
+	    (float)actions >= vec->cap * (float)baseline[before_level] &&
+	    !*term) {
+		arc_game_lose(g);
+		*term = 1;
+	}
+	return 0.0f;
 }
 
 static void work(const struct worker_arg *a)
@@ -112,9 +155,12 @@ static void work(const struct worker_arg *a)
 		}
 		int32_t reward_i;
 		uint8_t term;
+		int32_t before_level = g->engine.level_index;
 		arc_game_step(g, a->actions[i], a->vec->packed ? a->owner->frame
 							 : a->obs + (size_t)i * FRAME_BYTES,
 			      &reward_i, &term);
+		float shaped = shape_reward(vec, i, g, before_level, reward_i,
+					    &term);
 		if (a->vec->packed) {
 			uint8_t *out = (uint8_t *)a->obs +
 				       (size_t)i * (FRAME_BYTES / 2);
@@ -126,7 +172,7 @@ static void work(const struct worker_arg *a)
 		vec->elapsed[i] += 1;
 		uint8_t trunc = vec->horizon > 0 &&
 				vec->elapsed[i] >= vec->horizon && !term;
-		a->reward[i] = (float)reward_i;
+		a->reward[i] = shaped;
 		a->terminated[i] = term;
 		a->truncated[i] = trunc;
 		if (a->level)
@@ -224,6 +270,9 @@ struct arc_vec_env *arc_vecenv_new_pool(const struct arc_game_spec *pool,
 	vec->task = calloc(num_envs, sizeof(int32_t));
 	vec->rng = calloc(num_envs, sizeof(uint32_t));
 	vec->elapsed = calloc(num_envs, sizeof(int32_t));
+	vec->level_actions = calloc(num_envs, sizeof(int32_t));
+	vec->reward_mode = ARC_REWARD_LEVELS;
+	vec->cap = 0.0f;
 	for (int32_t i = 0; i < num_envs; i++) {
 		uint32_t state = (uint32_t)(seed + 0x9e3779b9u * (uint32_t)i);
 		vec->rng[i] = state ? state : 1u;
@@ -305,6 +354,7 @@ void arc_vecenv_free(struct arc_vec_env *vec)
 	free(vec->task);
 	free(vec->rng);
 	free(vec->elapsed);
+	free(vec->level_actions);
 	free(vec);
 }
 
@@ -320,6 +370,12 @@ int32_t arc_vecenv_num_actions(const struct arc_vec_env *vec)
 void arc_vecenv_set_packed(struct arc_vec_env *vec, int32_t packed)
 {
 	vec->packed = packed ? 1 : 0;
+}
+
+void arc_vecenv_set_reward(struct arc_vec_env *vec, int32_t mode, float cap)
+{
+	vec->reward_mode = mode;
+	vec->cap = cap;
 }
 
 void arc_vecenv_tasks(const struct arc_vec_env *vec, int32_t *out)
@@ -359,7 +415,7 @@ struct arc_vec_env *arc_vecenv_new(const struct arc_level_data *levels,
 				      aux_array,      aux_stride,
 				      statics,        simple_actions,
 				      num_simple,     has_click,
-				      max_frames };
+				      max_frames,     NULL };
 	return arc_vecenv_new_pool(&spec, 1, num_envs, num_threads, 1);
 }
 

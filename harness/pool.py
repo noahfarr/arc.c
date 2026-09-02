@@ -1,5 +1,7 @@
 import ctypes
 
+import numpy as np
+
 from . import aux as auxdecl
 from . import differ
 from .clib import Library
@@ -16,7 +18,10 @@ class Spec(ctypes.Structure):
         ("num_simple", ctypes.c_int32),
         ("has_click", ctypes.c_int32),
         ("max_frames", ctypes.c_int32),
+        ("baseline", ctypes.c_void_p),
     ]
+
+REWARD_LEVELS, REWARD_RHAE = 0, 1
 
 
 def signatures(lib):
@@ -32,13 +37,35 @@ def signatures(lib):
     lib.arc_vecenv_num_actions.argtypes = [ctypes.c_void_p]
     lib.arc_vecenv_tasks.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
     lib.arc_vecenv_action_counts.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    lib.arc_vecenv_set_reward.argtypes = [ctypes.c_void_p, ctypes.c_int32,
+                                          ctypes.c_float]
     return lib
 
 
+def human_baselines() -> dict:
+    """Per-level human baseline actions for the public games, from the
+    games.json the reference ships."""
+    import json
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parent.parent / "reference" / "games.json"
+    out = {}
+    for entry in json.loads(path.read_text()):
+        out[entry["game_id"][:4]] = list(entry["baseline_actions"])
+    return out
+
+
 class Pool:
+    """A vector environment drawing each slot's game from a pool. Entries
+    are public game ids ("ls20") or paths to generated environments
+    ("corpus/env_0001.npz"). With reward=REWARD_RHAE the reward is the
+    benchmark's per-level score against each game's baseline: the human
+    baseline for public games, the "baselines" label for generated ones."""
 
     def __init__(self, games, num_envs: int = 64, num_threads: int = 16,
-                 seed: int = 0, library: Library | None = None):
+                 seed: int = 0, library: Library | None = None,
+                 reward: int = REWARD_LEVELS, cap: float = 0.0,
+                 max_frames: int = 8):
         if isinstance(games, str):
             games = [games]
         games = list(games)
@@ -49,9 +76,13 @@ class Pool:
         self.library = library or Library()
         self.lib = signatures(self.library.lib)
         self._keep = []
+        humans = human_baselines() if reward == REWARD_RHAE else {}
 
         specs = (Spec * len(games))()
         for index, game in enumerate(games):
+            if str(game).endswith(".npz"):
+                specs[index] = self._generated(game, num_envs, max_frames)
+                continue
             _, proto = differ.build(game, self.library)
             self._keep.append(proto)
             kind = type(proto._aux)
@@ -67,6 +98,12 @@ class Pool:
                                      [ctypes.c_int32] * len(allocate))
                     call(ctypes.byref(auxes[slot]),
                          *[proto._dims[name] for name in allocate])
+            baseline = None
+            if game in humans:
+                arr = np.ascontiguousarray(humans[game], np.int32)
+                assert len(arr) == proto.levels.num_levels, game
+                self._keep.append(arr)
+                baseline = arr.ctypes.data
             specs[index] = Spec(
                 levels=ctypes.addressof(proto._level_data_struct),
                 hooks=ctypes.addressof(proto._hooks),
@@ -77,11 +114,41 @@ class Pool:
                 num_simple=len(proto._simple),
                 has_click=int(proto.levels.has_click),
                 max_frames=proto.max_frames,
+                baseline=baseline,
             )
         self._keep.append(specs)
         self.handle = self.lib.arc_vecenv_new_pool(
             specs, len(games), num_envs, num_threads, seed)
+        self.lib.arc_vecenv_set_reward(ctypes.c_void_p(self.handle), reward,
+                                       float(cap))
         self.num_actions = int(self.lib.arc_vecenv_num_actions(self.handle))
+
+    def _generated(self, path, num_envs, max_frames):
+        from .corpus import load
+        from .dsl import DslNative
+
+        spec, labels = load(path)
+        native = DslNative(spec, self.library)
+        self._keep.append(native)
+        auxes = (native.aux_t * num_envs)()
+        self._keep.append(auxes)
+        baseline = None
+        if labels.get("baselines"):
+            arr = np.ascontiguousarray(labels["baselines"], np.int32)
+            self._keep.append(arr)
+            baseline = arr.ctypes.data
+        return Spec(
+            levels=ctypes.addressof(native.level_data),
+            hooks=ctypes.addressof(native.hooks),
+            aux_array=ctypes.addressof(auxes),
+            aux_stride=ctypes.sizeof(native.aux_t),
+            statics=ctypes.addressof(native.native),
+            simple_actions=native.simple.ctypes.data,
+            num_simple=len(native.simple),
+            has_click=1,
+            max_frames=max_frames,
+            baseline=baseline,
+        )
 
     def tasks(self, out):
         self.lib.arc_vecenv_tasks(self.handle, out.ctypes.data)

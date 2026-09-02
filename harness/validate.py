@@ -18,17 +18,35 @@ class Exploration:
 
 def _actions_for(game) -> list[tuple[int, int, int]]:
     spec = getattr(game, "spec", None)
-    out = [(a, 0, 0) for a in (1, 2, 3, 4)]
     from .dsl import ON_CLICK
 
-    clickable = spec is not None and (
-        any(k.on_click for k in spec.kinds)
-        or any(r.trigger == ON_CLICK and r.enabled for r in spec.rules))
-    if clickable:
-        for cy in range(spec.grid_h):
-            for cx in range(spec.grid_w):
-                out.append((6, spec.origin_x + cx * spec.pitch + spec.pitch // 2,
-                            spec.origin_y + cy * spec.pitch + spec.pitch // 2))
+    if spec is None:
+        # A ported game: use its declared simple actions. ACTION7 is undo,
+        # which only revisits states and is useless to a graph search.
+        simple = [a for a in game.levels.simple_actions if a != 7]
+        out = [(a, 0, 0) for a in simple]
+        if game.levels.has_click:
+            for cy in range(64):
+                for cx in range(64):
+                    out.append((6, cx, cy))
+        return out
+
+    out = [(a, 0, 0) for a in (1, 2, 3, 4)]
+    clickable = {i for i, k in enumerate(spec.kinds) if k.on_click}
+    clickable |= {r.subject for r in spec.rules
+                  if r.trigger == ON_CLICK and r.enabled}
+    if -1 in clickable:
+        cells = [(cy, cx) for cy in range(spec.grid_h)
+                 for cx in range(spec.grid_w)]
+    else:
+        # Kinds never move in the interpreter (toggle swaps in place), so
+        # only cells that start with a clickable kind can ever respond.
+        cells = sorted({(int(cy), int(cx))
+                        for lv in spec.layouts
+                        for cy, cx in np.argwhere(np.isin(lv, list(clickable)))})
+    for cy, cx in cells:
+        out.append((6, spec.origin_x + cx * spec.pitch + spec.pitch // 2,
+                    spec.origin_y + cy * spec.pitch + spec.pitch // 2))
     return out
 
 

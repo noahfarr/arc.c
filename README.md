@@ -37,6 +37,11 @@ wired up yet.
 calls `np.random.shuffle` on numpy's unseeded global `RandomState`, so that
 region is not reproducible between processes.
 
+[docs/benchmark.md](docs/benchmark.md) is the reference for what the
+generator in `src/dsl.c` is aiming at: how the Kaggle evaluation scores, what
+is known about the hidden set, a mechanic-by-mechanic reading of the 25 public
+games, and the DSL's coverage against them.
+
 ## Quickstart
 
 **Requirements:** a C11 compiler.

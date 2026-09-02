@@ -51,6 +51,7 @@ static void load_level(struct arc_game *game)
 		}
 	}
 	aux->settled = 0;
+	aux->steps = s->budget ? s->budget[level] : 0;
 }
 
 static int won(const struct arc_game *game)
@@ -340,6 +341,20 @@ static int settle_once(struct arc_game *game)
 	return moved;
 }
 
+static void finish_action(struct arc_game *game)
+{
+	const struct arc_dsl_spec *s = spec_of(game);
+	struct arc_dsl_aux *aux = (struct arc_dsl_aux *)game->aux;
+	struct arc_engine_state *e = &game->engine;
+
+	if (e->status == NOT_FINISHED && won(game))
+		arc_game_next_level(game);
+	else if (e->status == NOT_FINISHED && s->budget &&
+		 s->budget[e->level_index] > 0 && aux->steps <= 0)
+		arc_game_lose(game);
+	arc_game_complete_action(game);
+}
+
 static void dsl_on_set_level(struct arc_game *game)
 {
 	load_level(game);
@@ -357,9 +372,7 @@ static void dsl_step_once(struct arc_game *game)
 			return;
 		}
 		aux->phase = 0;
-		if (e->status == NOT_FINISHED && won(game))
-			arc_game_next_level(game);
-		arc_game_complete_action(game);
+		finish_action(game);
 		return;
 	}
 
@@ -367,6 +380,8 @@ static void dsl_step_once(struct arc_game *game)
 		try_move(game, id - ARC_ACTION1);
 	else if (id == ARC_ACTION6)
 		do_click(game, e->action_x, e->action_y);
+	if (id != ARC_ACTION_RESET && aux->steps > 0)
+		aux->steps--;
 
 	if (e->status == NOT_FINISHED && id != ARC_ACTION_RESET)
 		move_actors(game);
@@ -382,9 +397,7 @@ static void dsl_step_once(struct arc_game *game)
 		aux->ticks = 1;
 		return;
 	}
-	if (e->status == NOT_FINISHED && won(game))
-		arc_game_next_level(game);
-	arc_game_complete_action(game);
+	finish_action(game);
 }
 
 static void paint(const struct arc_dsl_spec *s, int8_t *frame, int32_t x,
@@ -414,6 +427,48 @@ static void paint(const struct arc_dsl_spec *s, int8_t *frame, int32_t x,
 	}
 }
 
+static void paint_hud(const struct arc_dsl_spec *s,
+		      const struct arc_dsl_aux *aux, int32_t level,
+		      int8_t *frame)
+{
+	int32_t budget = s->budget ? s->budget[level] : 0;
+	int32_t total, whole, rest, filled;
+	int round_up;
+
+	if (s->hud == ARC_DSL_HUD_NONE || budget <= 0)
+		return;
+	/* The same rounding the ported games use for their bars. */
+	total = ARC_FRAME_SIZE * aux->steps;
+	whole = total / budget;
+	rest = total % budget;
+	round_up = 2 * rest > budget || (2 * rest == budget && whole % 2 == 1);
+	filled = whole + (round_up ? 1 : 0);
+	if (filled < 0)
+		filled = 0;
+	if (filled > ARC_FRAME_SIZE)
+		filled = ARC_FRAME_SIZE;
+	for (int32_t i = 0; i < ARC_FRAME_SIZE; i++) {
+		int8_t c = i < filled ? s->hud_on : s->hud_off;
+
+		switch (s->hud) {
+		case ARC_DSL_HUD_BOTTOM:
+			frame[(ARC_FRAME_SIZE - 1) * ARC_FRAME_SIZE + i] = c;
+			break;
+		case ARC_DSL_HUD_TOP:
+			frame[i] = c;
+			break;
+		case ARC_DSL_HUD_LEFT:
+			frame[i * ARC_FRAME_SIZE] = c;
+			break;
+		case ARC_DSL_HUD_RIGHT:
+			frame[i * ARC_FRAME_SIZE + ARC_FRAME_SIZE - 1] = c;
+			break;
+		default:
+			break;
+		}
+	}
+}
+
 static void dsl_render_interface(struct arc_game *game, int8_t *frame)
 {
 	const struct arc_dsl_spec *s = spec_of(game);
@@ -436,6 +491,7 @@ static void dsl_render_interface(struct arc_game *game, int8_t *frame)
 			if (kind != ARC_DSL_EMPTY)
 				paint(s, frame, x, y, kind, 1);
 		}
+	paint_hud(s, aux, game->engine.level_index, frame);
 }
 
 const struct arc_hooks arc_dsl_hooks = { arc_dsl_zero_aux, dsl_on_set_level,

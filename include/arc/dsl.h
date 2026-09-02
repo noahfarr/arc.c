@@ -30,6 +30,14 @@ enum { ARC_DSL_ON_ENTER = 0, ARC_DSL_ON_CLICK, ARC_DSL_ON_STEP };
 enum { ARC_DSL_STATIC = 0, ARC_DSL_CHASE, ARC_DSL_FLEE, ARC_DSL_PATROL };
 
 enum {
+	ARC_DSL_HUD_NONE = 0,
+	ARC_DSL_HUD_BOTTOM,
+	ARC_DSL_HUD_LEFT,
+	ARC_DSL_HUD_TOP,
+	ARC_DSL_HUD_RIGHT
+};
+
+enum {
 	ARC_DSL_ALWAYS = 0,
 	ARC_DSL_IF_COUNT_LE,
 	ARC_DSL_IF_NONE_LEFT,
@@ -82,11 +90,15 @@ struct arc_dsl_spec {
 	int32_t win_a;
 	int32_t win_b;
 	int8_t background;
+	int32_t hud;
+	int8_t hud_on;
+	int8_t hud_off;
 	int32_t num_rules;
 	struct arc_dsl_rule rules[ARC_DSL_MAX_RULES];
 	struct arc_dsl_kind kinds[ARC_DSL_MAX_KINDS];
 	const int8_t *layout;
 	const int8_t *floor;
+	const int32_t *budget;
 };
 
 struct arc_dsl_aux {
@@ -97,6 +109,7 @@ struct arc_dsl_aux {
 	uint8_t settled;
 	uint8_t phase;
 	int32_t ticks;
+	int32_t steps;
 };
 
 extern const struct arc_hooks arc_dsl_hooks;

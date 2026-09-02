@@ -126,7 +126,11 @@ def sample(rng, seed: int) -> Proposal | None:
 
 
 def sample_push(rng, w=9, h=9, boxes=2, pulls=20, wall_density=0.08,
-                colors=None):
+                colors=None, bias=0.0):
+    """Backwards sokoban: boxes start on their goals and are pulled away.
+    With bias > 0 that fraction of pulls picks the option that moves the
+    boxes furthest from their goals, so solutions grow with pulls instead
+    of random-walking back."""
     from .dsl import WIN_ALL_ON
 
     colors = colors or [11, 9, 8, 13, 7]
@@ -162,38 +166,59 @@ def sample_push(rng, w=9, h=9, boxes=2, pulls=20, wall_density=0.08,
     def is_free(y, x):
         return 0 <= y < h and 0 <= x < w and obj[0, y, x] == EMPTY
 
+    def reachable(sy, sx):
+        seen = {(sy, sx)}
+        stack = [(sy, sx)]
+        while stack:
+            y, x = stack.pop()
+            for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                ny, nx = y + dy, x + dx
+                if (ny, nx) not in seen and is_free(ny, nx):
+                    seen.add((ny, nx))
+                    stack.append((ny, nx))
+        return seen
+
+    def goal_distance(y, x):
+        return min(abs(y - gy) + abs(x - gx) for gy, gx in box_cells)
+
     dirs = [(-1, 0), (1, 0), (0, -1), (0, 1)]
     applied = 0
-    for _ in range(pulls * 40):
-        if applied >= pulls:
-            break
-        options = [(dy, dx) for dy, dx in dirs
-                   if 0 <= py + dy < h and 0 <= px + dx < w
-                   and obj[0, py + dy, px + dx] == box_kind
-                   and is_free(py - dy, px - dx)]
-        if options and rng.random() < 0.85:
-            dy, dx = options[int(rng.integers(len(options)))]
-            obj[0, py + dy, px + dx] = EMPTY
-            obj[0, py, px] = box_kind
-            py, px = py - dy, px - dx
-            applied += 1
-            continue
-        cells = np.argwhere(obj[0] == box_kind)
-        if len(cells) and rng.random() < 0.7:
-            target = cells[int(rng.integers(len(cells)))]
-            best = None
+    for _ in range(pulls):
+        # Every pull the player can reach: stand at box+d, step to box+2d,
+        # the box follows to box+d. Reachability decides, not a walk, so
+        # the player's route between pulls is not part of the level.
+        reach = reachable(py, px)
+        options = []
+        for by, bx in map(tuple, np.argwhere(obj[0] == box_kind)):
             for dy, dx in dirs:
-                if not is_free(py + dy, px + dx):
-                    continue
-                d = abs(py + dy - target[0]) + abs(px + dx - target[1])
-                if best is None or d < best[0]:
-                    best = (d, dy, dx)
-            if best is not None:
-                py, px = py + best[1], px + best[2]
-                continue
-        dy, dx = dirs[int(rng.integers(4))]
-        if is_free(py + dy, px + dx):
-            py, px = py + dy, px + dx
+                sy, sx = by + dy, bx + dx
+                ty, tx = by + 2 * dy, bx + 2 * dx
+                if (sy, sx) in reach and is_free(ty, tx):
+                    options.append((by, bx, dy, dx))
+        if not options:
+            break
+        if rng.random() < bias:
+            gains = [goal_distance(by + dy, bx + dx)
+                     for by, bx, dy, dx in options]
+            best = max(gains)
+            options = [o for o, g in zip(options, gains) if g == best]
+        by, bx, dy, dx = options[int(rng.integers(len(options)))]
+        obj[0, by, bx] = EMPTY
+        obj[0, by + dy, bx + dx] = box_kind
+        py, px = by + 2 * dy, bx + 2 * dx
+        applied += 1
+
+    if bias > 0 and applied:
+        # Start the player far from the boxes, so walking to them is part
+        # of the solution as it is in the public games.
+        reach = sorted(reachable(py, px))
+        boxes_now = [tuple(c) for c in np.argwhere(obj[0] == box_kind)]
+
+        def box_distance(c):
+            return min(abs(c[0] - by) + abs(c[1] - bx) for by, bx in boxes_now)
+        reach.sort(key=box_distance, reverse=True)
+        top = reach[:max(1, len(reach) // 4)]
+        py, px = top[int(rng.integers(len(top)))]
 
     if applied == 0:
         return None
@@ -207,54 +232,102 @@ def sample_push(rng, w=9, h=9, boxes=2, pulls=20, wall_density=0.08,
     return Proposal(spec=spec, seed=0, mechanics={"pulls": applied})
 
 
+# Target bands for the optimal solution length of each level, from the
+# public games: humans need a median of 30 actions on level 1 and are at
+# the optimum there; later levels run 2-2.5x their optimum, and human
+# baselines for the last level have a median of 113 (docs/benchmark.md).
+LENGTH_BANDS = [(12, 30), (18, 40), (24, 55), (30, 70), (36, 90), (40, 120),
+                (45, 140), (50, 160)]
+
 LADDER = [
-    dict(w=7, h=7, boxes=1, pulls=6, wall_density=0.04),
-    dict(w=9, h=9, boxes=1, pulls=25, wall_density=0.06),
-    dict(w=9, h=9, boxes=2, pulls=60, wall_density=0.08),
-    dict(w=11, h=11, boxes=3, pulls=150, wall_density=0.10),
-    dict(w=13, h=13, boxes=4, pulls=250, wall_density=0.10),
-    dict(w=15, h=15, boxes=5, pulls=400, wall_density=0.10),
+    dict(w=11, h=11, boxes=1, pulls=30, wall_density=0.06, bias=0.6),
+    dict(w=11, h=11, boxes=1, pulls=45, wall_density=0.10, bias=0.6),
+    dict(w=11, h=11, boxes=2, pulls=70, wall_density=0.08, bias=0.5),
+    dict(w=13, h=13, boxes=2, pulls=120, wall_density=0.10, bias=0.5),
+    dict(w=13, h=13, boxes=3, pulls=200, wall_density=0.10, bias=0.4),
+    dict(w=15, h=15, boxes=3, pulls=300, wall_density=0.12, bias=0.4),
+    dict(w=15, h=15, boxes=4, pulls=400, wall_density=0.12, bias=0.3),
+    dict(w=15, h=15, boxes=5, pulls=500, wall_density=0.12, bias=0.3),
 ]
 
+# Budgets on the public set run 1-3x the human baseline, i.e. roughly 2-6x
+# the optimum; draw the multiplier per level.
+BUDGET_RANGE = (2.5, 4.5)
 
-def sample_environment(rng, levels=6):
+
+def _shortest(spec, level, library, aux_size, max_nodes):
+    import dataclasses
+
+    from .dsl import DslGame
+    from .validate import explore
+
+    one = dataclasses.replace(spec, layouts=spec.layouts[level:level + 1],
+                              floors=spec.floors[level:level + 1],
+                              budgets=None)
+    g = DslGame(one, library=library)
+    e = explore(g, aux_size, max_nodes=max_nodes)
+    g.close()
+    return e.shortest if e.solvable else None, e.exhausted
+
+
+def sample_environment(rng, levels=6, library=None, aux_size=None,
+                       max_nodes=40_000, attempts=30):
+    """A sokoban ladder whose levels are drawn until their optimal solution
+    length falls in LENGTH_BANDS, with a per-level budget derived from it.
+
+    Levels whose search does not finish within max_nodes are accepted on
+    the pull count alone and get a budget from that instead."""
+    import dataclasses
+
     from .dsl import Spec, WIN_ALL_ON
 
     colors = [int(c) for c in rng.permutation(PALETTE)[:5]]
     w = max(cfg["w"] for cfg in LADDER[:levels])
     h = max(cfg["h"] for cfg in LADDER[:levels])
-    stack_obj, stack_floor, meta = [], [], []
+    stack_obj, stack_floor, meta, budgets = [], [], [], []
     for i in range(levels):
         cfg = dict(LADDER[i % len(LADDER)])
-        p = None
-        for _ in range(25):
+        lo, hi = LENGTH_BANDS[min(i, len(LENGTH_BANDS) - 1)]
+        chosen = None
+        for _ in range(attempts):
             cand = sample_push(rng, colors=colors, **cfg)
-            if cand is None:
+            if cand is None or cand.mechanics["pulls"] < 0.5 * cfg["pulls"]:
                 continue
-            if cand.mechanics["pulls"] >= 0.6 * cfg["pulls"]:
-                p = cand
-                break
-            if p is None or cand.mechanics["pulls"] > p.mechanics["pulls"]:
-                p = cand
-        if p is None:
+            shortest, exhausted = (None, False)
+            if library is not None:
+                shortest, exhausted = _shortest(cand.spec, 0, library,
+                                                aux_size, max_nodes)
+            if shortest is None and exhausted:
+                continue
+            if shortest is not None and not (lo <= shortest <= hi):
+                continue
+            chosen = (cand, shortest)
+            break
+        if chosen is None:
             return None
+        p, shortest = chosen
+        # Pad with background, not wall: each level carries its own border
+        # walls, and a wall-coloured slab would cover most of the frame.
         obj = np.full((h, w), EMPTY, np.int8)
         flr = np.full((h, w), EMPTY, np.int8)
-        obj[:] = 1
         oy = (h - cfg["h"]) // 2
         ox = (w - cfg["w"]) // 2
         obj[oy:oy + cfg["h"], ox:ox + cfg["w"]] = p.spec.layouts[0]
         flr[oy:oy + cfg["h"], ox:ox + cfg["w"]] = p.spec.floors[0]
         stack_obj.append(obj)
         stack_floor.append(flr)
-        meta.append({"pulls": p.mechanics["pulls"], "boxes": cfg["boxes"]})
+        base = shortest if shortest is not None else int(0.6 * p.mechanics["pulls"])
+        budgets.append(int(round(base * rng.uniform(*BUDGET_RANGE))))
+        meta.append({"pulls": p.mechanics["pulls"], "boxes": cfg["boxes"],
+                     "shortest": shortest})
     proto = p.spec
-    pitch = int(max(1, min(64 // max(w, h), 8)))
+    pitch = int(max(1, min(62 // max(w, h), 8)))
     spec = Spec(kinds=proto.kinds, layouts=np.stack(stack_obj),
                 floors=np.stack(stack_floor), player_kind=proto.player_kind,
                 win_mode=WIN_ALL_ON, win_a=proto.win_a, win_b=proto.win_b,
                 pitch=pitch, origin_x=(64 - w * pitch) // 2,
-                origin_y=(64 - h * pitch) // 2)
+                origin_y=(62 - h * pitch) // 2,
+                budgets=np.array(budgets, np.int32))
     return Proposal(spec=spec, seed=0, mechanics={"levels": meta})
 
 
@@ -280,12 +353,12 @@ def randomise_appearance(rng, spec, protect=()):
     return dataclasses.replace(spec, kinds=kinds)
 
 
-def sample_composed(rng, num_mechanics=3, room_w=3, room_h=5, levels=None,
-                    hazards=0, scenery=6):
-    from .dsl import (IF_NONE_LEFT, ON_CLICK, ON_ENTER, ON_STEP, REMOVE, Rule,
-                      Spec, TOGGLE, WIN_REACH)
-
-    rooms = num_mechanics + 1
+def _rooms_kinds(rng, chosen, hazards):
+    """Kinds and rules for a chain of rooms gated by the mechanics in
+    `chosen` (each "key", "switch" or "collect"), plus decor kinds and
+    hazard kinds. Returns everything the layout needs."""
+    from .dsl import (CHASE, IF_NONE_LEFT, ON_CLICK, ON_ENTER, ON_STEP,
+                      PATROL, REMOVE, Rule, TOGGLE)
 
     swatch = [int(c) for c in rng.permutation(PALETTE)[:int(rng.integers(5, 8))]]
     colors = [swatch[i % len(swatch)] for i in range(2 * ARC_MAX_KINDS)]
@@ -295,11 +368,8 @@ def sample_composed(rng, num_mechanics=3, room_w=3, room_h=5, levels=None,
              Kind(color=int(colors[1]), on_enter=BLOCK),
              Kind(color=int(colors[2])),
              Kind(color=int(colors[3]))]
-    rules = []
-    door_kind, trigger_kind, chosen = [], [], []
-    for m in range(num_mechanics):
-        kind = str(rng.choice(MECHANICS))
-        chosen.append(kind)
+    rules, door_kind, trigger_kind = [], [], []
+    for m, kind in enumerate(chosen):
         d = len(kinds)
         kinds.append(Kind(color=int(colors[4 + 2 * m]), on_enter=BLOCK))
         t = len(kinds)
@@ -317,41 +387,47 @@ def sample_composed(rng, num_mechanics=3, room_w=3, room_h=5, levels=None,
             rules.append(Rule(trigger=ON_STEP, subject=-1, effect=TOGGLE,
                               predicate=IF_NONE_LEFT, pred_a=t,
                               effect_a=d, effect_b=floor_k))
-    from .dsl import CHASE, PATROL
-
     scenery_kinds = []
-    for _ in range(min(3, max(0, scenery))):
-        if len(kinds) >= 14:
+    for _ in range(3):
+        if len(kinds) >= 13:
             break
         scenery_kinds.append(len(kinds))
         kinds.append(Kind(color=int(colors[len(kinds)])))
-
     hazard_kinds = []
     for hz in range(hazards):
+        if len(kinds) >= 15:
+            break
         style = str(rng.choice(HAZARDS))
+        a = len(kinds)
         if style == "patrol":
-            a = len(kinds)
             kinds.append(Kind(color=int(colors[-1 - 2 * hz]), motion=PATROL,
                               motion_a=3, motion_b=a + 1, deadly=1))
             kinds.append(Kind(color=int(colors[-1 - 2 * hz]), motion=PATROL,
                               motion_a=2, motion_b=a, deadly=1))
-            hazard_kinds.append(a)
         else:
-            a = len(kinds)
             kinds.append(Kind(color=int(colors[-1 - 2 * hz]), motion=CHASE,
                               deadly=1))
-            hazard_kinds.append(a)
-    if len(kinds) > 16 or len(rules) > 8:
-        return None
+        hazard_kinds.append(a)
+    return dict(kinds=kinds, rules=rules, door_kind=door_kind,
+                trigger_kind=trigger_kind, scenery_kinds=scenery_kinds,
+                hazard_kinds=hazard_kinds, floor_k=floor_k, wall_k=wall_k,
+                player_k=player_k, goal_k=goal_k)
 
+
+def _rooms_layout(rng, parts, chosen, order, room_w, room_h, hazards,
+                  scenery, collect_n):
+    """One level: rooms order[0..] in a snake grid, door i between rooms i
+    and i+1 opened by mechanic order[i], player in the first room, goal in
+    the last. Returns (obj, floor, w, h)."""
     import math
 
+    used = len(order)
+    rooms = used + 1
     cols = max(1, math.ceil(math.sqrt(rooms)))
     grid_rows = math.ceil(rooms / cols)
     w = cols * room_w + cols + 1
     h = grid_rows * room_h + grid_rows + 1
-    if w > 32 or h > 32:
-        return None
+    wall_k, player_k, goal_k = parts["wall_k"], parts["player_k"], parts["goal_k"]
 
     def place(i):
         r = i // cols
@@ -370,55 +446,157 @@ def sample_composed(rng, num_mechanics=3, room_w=3, room_h=5, levels=None,
         rj, cj = place(j)
         if ri == rj:
             x = 1 + min(ci, cj) * (room_w + 1) + room_w
-            y = 1 + ri * (room_h + 1) + room_h // 2
+            y = 1 + ri * (room_h + 1) + int(rng.integers(room_h))
         else:
-            x = 1 + ci * (room_w + 1) + room_w // 2
+            x = 1 + ci * (room_w + 1) + int(rng.integers(room_w))
             y = 1 + min(ri, rj) * (room_h + 1) + room_h
         return y, x
 
-    stack_obj, stack_flr = [], []
-    plan = levels or list(range(1, num_mechanics + 1))
-    for used in plan:
-        obj = np.full((h, w), wall_k, np.int8)
-        flr = np.full((h, w), EMPTY, np.int8)
-        for i in range(used + 1):
-            for y, x in room_cells(i):
-                obj[y, x] = EMPTY
-        for i in range(used):
-            dy, dx = door_between(i, i + 1)
-            obj[dy, dx] = door_kind[i]
-        cells = room_cells(0)
-        obj[cells[0]] = player_k
-        for i in range(used):
-            spots = [c for c in room_cells(i) if obj[c] == EMPTY]
-            rng.shuffle(spots)
-            count = 1 if chosen[i] != "collect" else int(rng.integers(2, 4))
-            for j in range(min(count, len(spots))):
-                obj[spots[j]] = trigger_kind[i]
-        for n, hk in enumerate(hazard_kinds):
-            room = min(1 + n, used)
-            spots = [c for c in room_cells(room) if obj[c] == EMPTY]
-            if len(spots) > 2:
-                obj[spots[len(spots) // 2]] = hk
-        for _ in range(scenery):
-            room = int(rng.integers(0, used + 1))
-            spots = [c for c in room_cells(room) if obj[c] == EMPTY]
-            if len(spots) > 3 and scenery_kinds:
-                pick = spots[int(rng.integers(len(spots)))]
-                obj[pick] = scenery_kinds[int(rng.integers(len(scenery_kinds)))]
-        last = [c for c in room_cells(used) if obj[c] == EMPTY]
-        flr[last[-1]] = goal_k
-        stack_obj.append(obj)
-        stack_flr.append(flr)
+    obj = np.full((h, w), wall_k, np.int8)
+    flr = np.full((h, w), EMPTY, np.int8)
+    for i in range(rooms):
+        for y, x in room_cells(i):
+            obj[y, x] = EMPTY
+    for i in range(used):
+        dy, dx = door_between(i, i + 1)
+        obj[dy, dx] = parts["door_kind"][order[i]]
 
-    pitch = int(max(1, min(64 // max(w, h), 8)))
-    spec = Spec(kinds=kinds, layouts=np.stack(stack_obj),
-                floors=np.stack(stack_flr), player_kind=player_k,
-                win_mode=WIN_REACH, win_a=goal_k, pitch=pitch,
-                origin_x=(64 - w * pitch) // 2, origin_y=(64 - h * pitch) // 2,
-                rules=rules)
+    def free_in(i):
+        spots = [c for c in room_cells(i) if obj[c] == EMPTY]
+        rng.shuffle(spots)
+        return spots
+
+    obj[free_in(0)[0]] = player_k
+    for i in range(used):
+        m = order[i]
+        spots = free_in(i)
+        count = collect_n if chosen[m] == "collect" else 1
+        for j in range(min(count, len(spots))):
+            obj[spots[j]] = parts["trigger_kind"][m]
+    for n, hk in enumerate(parts["hazard_kinds"][:hazards]):
+        room = 1 + (n % max(1, used))
+        spots = free_in(room)
+        if len(spots) > 3:
+            obj[spots[0]] = hk
+    for _ in range(scenery):
+        room = int(rng.integers(0, rooms))
+        spots = free_in(room)
+        if len(spots) > 3 and parts["scenery_kinds"]:
+            obj[spots[0]] = parts["scenery_kinds"][
+                int(rng.integers(len(parts["scenery_kinds"])))]
+    last = free_in(used)
+    flr[last[0]] = goal_k
+    return obj, flr, w, h
+
+
+def _rooms_spec(parts, layouts, floors, budgets=None):
+    from .dsl import Spec, WIN_REACH
+
+    h = max(o.shape[0] for o in layouts)
+    w = max(o.shape[1] for o in layouts)
+    stack_obj, stack_flr = [], []
+    for obj, flr in zip(layouts, floors):
+        o = np.full((h, w), EMPTY, np.int8)
+        f = np.full((h, w), EMPTY, np.int8)
+        oy, ox = (h - obj.shape[0]) // 2, (w - obj.shape[1]) // 2
+        o[oy:oy + obj.shape[0], ox:ox + obj.shape[1]] = obj
+        f[oy:oy + obj.shape[0], ox:ox + obj.shape[1]] = flr
+        stack_obj.append(o)
+        stack_flr.append(f)
+    pitch = int(max(1, min(62 // max(w, h), 8)))
+    return Spec(kinds=parts["kinds"], layouts=np.stack(stack_obj),
+                floors=np.stack(stack_flr), player_kind=parts["player_k"],
+                win_mode=WIN_REACH, win_a=parts["goal_k"], pitch=pitch,
+                origin_x=(64 - w * pitch) // 2, origin_y=(62 - h * pitch) // 2,
+                rules=parts["rules"],
+                budgets=None if budgets is None else np.array(budgets, np.int32))
+
+
+def sample_composed(rng, num_mechanics=3, room_w=3, room_h=5, levels=None,
+                    hazards=0, scenery=6):
+    """Rooms gated by num_mechanics mechanics, one level per number of
+    mechanics in use (the single-size form novelty and necessity checks
+    use)."""
+    chosen = [str(rng.choice(MECHANICS)) for _ in range(num_mechanics)]
+    parts = _rooms_kinds(rng, chosen, hazards)
+    if len(parts["kinds"]) > 16 or len(parts["rules"]) > 8:
+        return None
+    plan = levels or list(range(1, num_mechanics + 1))
+    layouts, floors = [], []
+    for used in plan:
+        obj, flr, w, h = _rooms_layout(
+            rng, parts, chosen, list(range(used)), room_w, room_h, hazards,
+            scenery, int(rng.integers(2, 4)))
+        if w > 32 or h > 32:
+            return None
+        layouts.append(obj)
+        floors.append(flr)
+    spec = _rooms_spec(parts, layouts, floors)
     return Proposal(spec=spec, seed=0,
-                    mechanics={"kinds": chosen, "hazards": hazard_kinds})
+                    mechanics={"kinds": chosen, "hazards": parts["hazard_kinds"]})
+
+
+# Six-level plan for the rooms family: mechanics arrive one per level,
+# then the same mechanics recur in bigger rooms, in a different order,
+# with hazards and decor. (used, room_w, room_h, hazards, scenery, collect)
+ROOMS_LADDER = [
+    (1, 5, 5, 0, 2, 2),
+    (2, 5, 5, 0, 3, 2),
+    (3, 5, 5, 0, 4, 3),
+    (3, 6, 6, 1, 4, 3),
+    (3, 7, 7, 1, 6, 4),
+    (3, 7, 7, 2, 6, 4),
+]
+
+
+def sample_rooms(rng, levels=6, library=None, aux_size=None,
+                 max_nodes=40_000, attempts=20):
+    """The rooms family as a ladder: each level is redrawn until BFS puts
+    its optimum inside LENGTH_BANDS (or the search does not finish), with
+    budgets from the optimum."""
+    import dataclasses
+
+    chosen = [str(rng.choice(MECHANICS)) for _ in range(3)]
+    parts = _rooms_kinds(rng, chosen, 2)
+    if len(parts["kinds"]) > 16 or len(parts["rules"]) > 8:
+        return None
+    layouts, floors, budgets, meta = [], [], [], []
+    for i in range(levels):
+        used, rw, rh, hz, sc, cn = ROOMS_LADDER[min(i, len(ROOMS_LADDER) - 1)]
+        used = min(used, len(chosen))
+        lo, hi = LENGTH_BANDS[min(i, len(LENGTH_BANDS) - 1)]
+        chosen_level = None
+        for _ in range(attempts):
+            order = list(range(used))
+            if i >= 3:
+                rng.shuffle(order)
+            obj, flr, w, h = _rooms_layout(rng, parts, chosen, order, rw, rh,
+                                           hz, sc, cn)
+            if w > 32 or h > 32:
+                continue
+            shortest, exhausted = None, False
+            if library is not None:
+                one = _rooms_spec(parts, [obj], [flr])
+                shortest, exhausted = _shortest(one, 0, library, aux_size,
+                                                max_nodes)
+                if shortest is None and exhausted:
+                    continue
+                if shortest is not None and not (lo <= shortest <= hi):
+                    continue
+            chosen_level = (obj, flr, shortest, order)
+            break
+        if chosen_level is None:
+            return None
+        obj, flr, shortest, order = chosen_level
+        layouts.append(obj)
+        floors.append(flr)
+        base = shortest if shortest is not None else (used + 1) * (rw + rh)
+        budgets.append(int(round(base * rng.uniform(*BUDGET_RANGE))))
+        meta.append({"used": used, "order": order, "shortest": shortest})
+    spec = _rooms_spec(parts, layouts, floors, budgets)
+    return Proposal(spec=spec, seed=0,
+                    mechanics={"kinds": chosen, "hazards": parts["hazard_kinds"],
+                               "levels": meta})
 
 
 def sample_verified(rng, aux_size, library=None, attempts=12, **kwargs):

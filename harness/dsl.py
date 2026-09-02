@@ -29,6 +29,7 @@ EMPTY = -1
 
 
 STATIC, CHASE, FLEE, PATROL = range(4)
+HUD_NONE, HUD_BOTTOM, HUD_LEFT, HUD_TOP, HUD_RIGHT = range(5)
 
 
 @dataclasses.dataclass
@@ -64,6 +65,10 @@ class Spec:
     origin_y: int = 0
     background: int = 0
     rules: list = dataclasses.field(default_factory=list)
+    budgets: np.ndarray | None = None
+    hud: int = HUD_BOTTOM
+    hud_on: int = 12
+    hud_off: int = 11
 
     @property
     def num_levels(self) -> int:
@@ -78,17 +83,19 @@ class Spec:
         return self.layouts.shape[2]
 
 
-class DslGame:
-    def __init__(self, spec: Spec, library: Library | None = None,
-                 max_frames: int = 8) -> None:
-        self.library = library or Library()
+class DslNative:
+    """The C-side objects for a Spec: the arc_dsl_spec, its level data and
+    the buffers they point into. Shared by DslGame and the pool."""
+
+    def __init__(self, spec: Spec, library: Library) -> None:
+        self.library = library
         self.spec = spec
         self._keep: list = []
-        h = self.library.headers
+        h = library.headers
 
         kind_t = h.struct("arc_dsl_kind")
         spec_t = h.struct("arc_dsl_spec")
-        aux_t = h.struct("arc_dsl_aux")
+        self.aux_t = h.struct("arc_dsl_aux")
 
         layout = np.ascontiguousarray(spec.layouts, np.int8)
         floor = np.ascontiguousarray(spec.floors, np.int8)
@@ -107,6 +114,9 @@ class DslGame:
         native.win_a = spec.win_a
         native.win_b = spec.win_b
         native.background = spec.background
+        native.hud = spec.hud
+        native.hud_on = spec.hud_on
+        native.hud_off = spec.hud_off
         rule_t = h.struct("arc_dsl_rule")
         native.num_rules = len(spec.rules)
         for i, r in enumerate(spec.rules):
@@ -121,25 +131,21 @@ class DslGame:
                                      k.click_a, k.click_b)
         native.layout = layout.ctypes.data_as(ctypes.POINTER(ctypes.c_int8))
         native.floor = floor.ctypes.data_as(ctypes.POINTER(ctypes.c_int8))
+        if spec.budgets is None:
+            budget = np.zeros(spec.num_levels, np.int32)
+        else:
+            budget = np.ascontiguousarray(spec.budgets, np.int32)
+            assert budget.shape == (spec.num_levels,)
+        self._keep.append(budget)
+        native.budget = budget.ctypes.data_as(ctypes.POINTER(ctypes.c_int32))
         self._keep.append(native)
-
-        aux = aux_t()
-        self._keep.append(aux)
+        self.native = native
 
         self.levels = self._blank_levels()
-        level_data = self._level_data()
-
-        simple = np.ascontiguousarray([1, 2, 3, 4], np.int32)
-        self._keep.append(simple)
-        hooks = ctypes.c_void_p.in_dll(self.library.lib, "arc_dsl_hooks")
-        self.handle = self.library.sym.game_new(
-            ctypes.byref(level_data), ctypes.addressof(hooks),
-            ctypes.byref(aux), ctypes.byref(native),
-            simple.ctypes.data_as(ctypes.c_void_p), 4, 1, max_frames,
-        )
-        self.max_frames = max_frames
-        self.frames = np.zeros((max_frames, 64, 64), np.int8)
-        self._ptr = self.frames.ctypes.data_as(ctypes.c_void_p)
+        self.level_data = self._level_data()
+        self.simple = np.ascontiguousarray([1, 2, 3, 4], np.int32)
+        self._keep.append(self.simple)
+        self.hooks = ctypes.c_void_p.in_dll(library.lib, "arc_dsl_hooks")
 
     def _blank_levels(self) -> Levels:
         n, s = self.spec.num_levels, 1
@@ -178,6 +184,27 @@ class DslGame:
         data, owned = statics.pack(t, values)
         self._keep += owned + [data]
         return data
+
+
+class DslGame:
+    def __init__(self, spec: Spec, library: Library | None = None,
+                 max_frames: int = 8) -> None:
+        self.library = library or Library()
+        self.spec = spec
+        self._native = DslNative(spec, self.library)
+        self.levels = self._native.levels
+        aux = self._native.aux_t()
+        self._aux = aux
+        simple = self._native.simple
+        self.handle = self.library.sym.game_new(
+            ctypes.byref(self._native.level_data),
+            ctypes.addressof(self._native.hooks),
+            ctypes.byref(aux), ctypes.byref(self._native.native),
+            simple.ctypes.data_as(ctypes.c_void_p), 4, 1, max_frames,
+        )
+        self.max_frames = max_frames
+        self.frames = np.zeros((max_frames, 64, 64), np.int8)
+        self._ptr = self.frames.ctypes.data_as(ctypes.c_void_p)
 
     def init(self):
         self.library.sym.game_init(self.handle)
