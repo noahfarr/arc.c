@@ -108,7 +108,7 @@ def baselines_for(shortest, budgets) -> list[int]:
 def build(count: int, out: Path, seed: int = 0, trials: int = 10_000,
           horizon: int = 800, threads: int = 8, verbose: bool = True,
           families=FAMILIES, library=None, distance_nodes: int = 60_000,
-          stages=(2,)) -> list:
+          stages=(2,), prefix: str = "env_", manifest: bool = True) -> list:
     """Generate `count` environments across `families` and curriculum
     `stages` (see generate.STAGE_BANDS), keep those whose non-tutorial
     levels a random policy wins no more often than the stage's bar (the
@@ -180,7 +180,7 @@ def build(count: int, out: Path, seed: int = 0, trials: int = 10_000,
             distances.append(table)
         labels["distances"] = [None if t is None else int(len(t[0]))
                                for t in distances]
-        name = f"env_{made:04d}"
+        name = f"{prefix}{made:04d}"
         save(spec, labels, out / f"{name}.npz", distances=distances)
         manifest.append({"name": name, **labels})
         made += 1
@@ -188,5 +188,37 @@ def build(count: int, out: Path, seed: int = 0, trials: int = 10_000,
             print(f"  {name} {family} stage {stage}: shortest={labels['shortest']} "
                   f"budgets={labels['budgets']} rates="
                   f"{['%.5f' % r for r in rates]}")
+    if manifest:
+        (out / "manifest.json").write_text(json.dumps(manifest, indent=1))
+    return manifest
+
+
+def _worker(args):
+    count, out, seed, trials, horizon, families, stages, distance_nodes, prefix = args
+    from .clib import Library
+
+    return build(count, Path(out), seed=seed, trials=trials, horizon=horizon,
+                 threads=1, verbose=False, families=families,
+                 library=Library(), distance_nodes=distance_nodes,
+                 stages=stages, prefix=prefix, manifest=False)
+
+
+def build_parallel(count: int, out: Path, workers: int = 16, seed: int = 0,
+                   trials: int = 4_000, horizon: int = 800, families=FAMILIES,
+                   stages=(0, 1, 2), distance_nodes: int = 40_000) -> list:
+    """build() across `workers` processes, each with its own library and
+    seed, writing w<NN>_<i>.npz into `out`; one manifest at the end."""
+    import multiprocessing as mp
+
+    out = Path(out)
+    out.mkdir(parents=True, exist_ok=True)
+    per = [count // workers + (1 if i < count % workers else 0)
+           for i in range(workers)]
+    jobs = [(n, str(out), seed * 1000 + i, trials, horizon, families, stages,
+             distance_nodes, f"w{i:02d}_") for i, n in enumerate(per) if n]
+    ctx = mp.get_context("fork")
+    with ctx.Pool(len(jobs)) as pool:
+        parts = pool.map(_worker, jobs)
+    manifest = [entry for part in parts for entry in part]
     (out / "manifest.json").write_text(json.dumps(manifest, indent=1))
     return manifest
