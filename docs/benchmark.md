@@ -406,8 +406,15 @@ ones.
 
 1. ~~Fix the distributions of the two existing families~~ (done
    2026-09-02, see §4.2; remaining: solvability past level 3 without BFS).
-2. **Reward and protocol in relax-arc**: the RHAE surrogate above, whole
-   environment as episode, public games held out as the validation set.
+2. ~~Reward and protocol in relax-arc~~ (done 2026-09-02): `arc_vecenv`
+   scores a completed level as `w_l · min(1, (baseline_l / actions_l)²)`
+   and can lose a level at `cap × baseline_l` actions; public games use the
+   human baselines from `reference/games.json`, generated games a
+   `baselines` label of `k_l × optimum` with `k` from tu93/re86. In
+   relax-arc, `environment=arc/generated` trains on a corpus directory and
+   evaluates on the 23 public games held out, so `evaluation/episode_return`
+   is a benchmark score. Open: `k_l` is measured on two games; unverified
+   levels get a budget-derived baseline.
 3. **New primitives in the tile interpreter**, in the order of §3: selection
    as a first-class object with ACTION5 semantics, win predicates
    (target picture, sequence, exact counts), avatar state and
