@@ -22,7 +22,12 @@ static int inside(const struct arc_dsl_spec *s, int32_t x, int32_t y)
 
 void arc_dsl_zero_aux(void *aux)
 {
+	/* The load counter survives resets: it seeds the palette permutation,
+	 * which must differ from one reset to the next. */
+	int32_t loads = ((struct arc_dsl_aux *)aux)->loads;
+
 	memset(aux, 0, sizeof(struct arc_dsl_aux));
+	((struct arc_dsl_aux *)aux)->loads = loads;
 }
 
 int32_t arc_dsl_num_actions(const struct arc_dsl_spec *spec)
@@ -82,6 +87,40 @@ static void load_level(struct arc_game *game)
 	aux->steps = s->budget ? s->budget[level] : 0;
 	aux->sel_x = -1;
 	aux->sel_y = -1;
+	aux->loads++;
+	for (int32_t c = 0; c < 16; c++)
+		aux->color_map[c] = (int8_t)c;
+	if (s->palette_shuffle) {
+		/* Fisher-Yates over the colours other than the background,
+		 * seeded by the spec and the load count so every reset of
+		 * every environment draws its own permutation. */
+		uint32_t x = s->seed ^ (0x9e3779b9u * (uint32_t)aux->loads) ^
+			     (uint32_t)(uintptr_t)aux;
+		int8_t pool[16];
+		int32_t n = 0;
+
+		if (!x)
+			x = 1;
+		for (int32_t c = 0; c < 16; c++)
+			if (c != s->background)
+				pool[n++] = (int8_t)c;
+		for (int32_t i = n - 1; i > 0; i--) {
+			int32_t j;
+			int8_t t;
+
+			x ^= x << 13;
+			x ^= x >> 17;
+			x ^= x << 5;
+			j = (int32_t)(x % (uint32_t)(i + 1));
+			t = pool[i];
+			pool[i] = pool[j];
+			pool[j] = t;
+		}
+		n = 0;
+		for (int32_t c = 0; c < 16; c++)
+			if (c != s->background)
+				aux->color_map[c] = pool[n++];
+	}
 }
 
 static int won(const struct arc_game *game)
@@ -296,10 +335,11 @@ static void cycle_selection(struct arc_game *game)
 	}
 }
 
-static void try_move(struct arc_game *game, int32_t dir)
+static void try_move(struct arc_game *game, int32_t key)
 {
 	const struct arc_dsl_spec *s = spec_of(game);
 	struct arc_dsl_aux *aux = (struct arc_dsl_aux *)game->aux;
+	int32_t dir = s->key_dir[key & 3] & 3;
 	int32_t nx, ny;
 	int blocked = 0;
 	int8_t target;
@@ -519,7 +559,8 @@ static void dsl_step_once(struct arc_game *game)
 
 	if (id >= ARC_ACTION1 && id <= ARC_ACTION4)
 		try_move(game, id - ARC_ACTION1);
-	else if (id == ARC_ACTION5 && s_uses5(game))
+	else if (id == ARC_ACTION5 && s_uses5(game) &&
+		 spec_of(game)->action5 == ARC_DSL_A5_CYCLE)
 		cycle_selection(game);
 	else if (id == ARC_ACTION6)
 		do_click(game, e->action_x, e->action_y);
@@ -543,10 +584,10 @@ static void dsl_step_once(struct arc_game *game)
 	finish_action(game);
 }
 
-static void paint(const struct arc_dsl_spec *s, int8_t *frame, int32_t x,
-		  int32_t y, int8_t kind, int use_size)
+static void paint(const struct arc_dsl_spec *s, const struct arc_dsl_aux *aux,
+		  int8_t *frame, int32_t x, int32_t y, int8_t kind, int use_size)
 {
-	int8_t color = s->kinds[kind].color;
+	int8_t color = aux->color_map[s->kinds[kind].color & 15];
 	int32_t span = s->pitch;
 	int32_t x0, y0;
 
@@ -623,16 +664,16 @@ static void dsl_render_interface(struct arc_game *game, int8_t *frame)
 			int8_t on_top = aux->grid[idx(s, x, y)];
 
 			if (floor != ARC_DSL_EMPTY)
-				paint(s, frame, x, y, floor, 0);
+				paint(s, aux, frame, x, y, floor, 0);
 			else if (on_top != ARC_DSL_EMPTY)
-				paint(s, frame, x, y, 0, 0);
+				paint(s, aux, frame, x, y, 0, 0);
 		}
 	for (int32_t y = 0; y < s->grid_h; y++)
 		for (int32_t x = 0; x < s->grid_w; x++) {
 			int8_t kind = aux->grid[idx(s, x, y)];
 
 			if (kind != ARC_DSL_EMPTY)
-				paint(s, frame, x, y, kind, 1);
+				paint(s, aux, frame, x, y, kind, 1);
 		}
 	if (aux->sel_x >= 0) {
 		/* A one-pixel ring around the selected cell. */
@@ -647,7 +688,7 @@ static void dsl_render_interface(struct arc_game *game, int8_t *frame)
 				if (xs[j] >= 0 && xs[j] < ARC_FRAME_SIZE &&
 				    ys[j] >= 0 && ys[j] < ARC_FRAME_SIZE)
 					frame[ys[j] * ARC_FRAME_SIZE + xs[j]] =
-						s->select_color;
+						aux->color_map[s->select_color & 15];
 		}
 	}
 	paint_hud(s, aux, game->engine.level_index, frame);

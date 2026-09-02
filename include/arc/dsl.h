@@ -38,6 +38,11 @@ enum {
  * object was last clicked (or cycled to with ACTION5). */
 enum { ARC_DSL_CONTROL_AVATAR = 0, ARC_DSL_CONTROL_SELECT };
 
+/* What ACTION5 does when the game declares it: nothing, or cycle the
+ * selection. The benchmark's ACTION5 varies per game (rotate, pour, grab,
+ * rewind...), so an agent must find out; "nothing" makes probing cost. */
+enum { ARC_DSL_A5_NONE = 0, ARC_DSL_A5_CYCLE };
+
 /* Stencils for ARC_DSL_CYCLE: the cell alone, the cell and its four
  * neighbours, or the full 3x3 block. */
 enum { ARC_DSL_STENCIL_CELL = 0, ARC_DSL_STENCIL_CROSS, ARC_DSL_STENCIL_BLOCK };
@@ -114,6 +119,15 @@ struct arc_dsl_spec {
 	int8_t hud_off;
 	int32_t control;
 	int32_t uses_action5;
+	int32_t action5;
+	/* Direction (0 up, 1 down, 2 left, 3 right) each of ACTION1..4 moves;
+	 * the benchmark maps them to up/down/left/right, one public game
+	 * rotates them, so a game may too. */
+	int8_t key_dir[4];
+	/* Permute the non-background colours every time a level loads, so
+	 * nothing can be recognised by colour alone. 0 keeps the spec's. */
+	int32_t palette_shuffle;
+	uint32_t seed;
 	int8_t select_color;
 	/* ARC_DSL_WIN_MATCH: canvas at (match_x0, match_y0), target at
 	 * (match_x1, match_y1), both match_w x match_h. */
@@ -142,6 +156,8 @@ struct arc_dsl_aux {
 	int32_t steps;
 	int32_t sel_x;
 	int32_t sel_y;
+	int32_t loads;
+	int8_t color_map[16];
 };
 
 extern const struct arc_hooks arc_dsl_hooks;

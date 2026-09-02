@@ -818,6 +818,31 @@ def sample_match(rng, levels=6, library=None, aux_size=None,
     return Proposal(spec=spec, seed=0, mechanics={"levels": meta, "stage": stage})
 
 
+# Key layouts: the benchmark maps ACTION1..4 to up/down/left/right; one
+# public game rotates them on some levels. Identity most of the time.
+KEY_LAYOUTS = [((0, 1, 2, 3), 0.85), ((2, 3, 1, 0), 0.05), ((3, 2, 0, 1), 0.05),
+               ((1, 0, 3, 2), 0.05)]
+
+
+def randomise_controls(rng, spec, family: str):
+    """Per-game control semantics an agent cannot assume on the hidden
+    set: which key moves which way, whether ACTION5 is declared and what
+    it does, and a fresh colour permutation at every reset."""
+    from .dsl import A5_CYCLE, A5_NONE
+
+    layouts, weights = zip(*KEY_LAYOUTS)
+    key_dir = layouts[int(rng.choice(len(layouts), p=weights))]
+    if family == "select":
+        uses5, action5 = 1, A5_CYCLE
+    else:
+        # Declared but inert half the time: probing ACTION5 must cost.
+        uses5 = int(rng.random() < 0.5)
+        action5 = A5_NONE
+    return dataclasses.replace(spec, key_dir=key_dir, uses_action5=uses5,
+                               action5=action5, palette_shuffle=1,
+                               seed=int(rng.integers(1, 2**31 - 1)))
+
+
 def sample_verified(rng, aux_size, library=None, attempts=12, **kwargs):
     import ctypes
     import dataclasses

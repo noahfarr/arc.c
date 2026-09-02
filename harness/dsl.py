@@ -8,6 +8,7 @@ from .reference import Levels
 
 MAX_KINDS = 16
 NONE, BLOCK, REMOVE, PUSH, BECOME, TOGGLE, WIN, LOSE, CYCLE = range(9)
+A5_NONE, A5_CYCLE = range(2)
 WIN_NONE_LEFT, WIN_ALL_ON, WIN_REACH, WIN_MATCH = range(4)
 CONTROL_AVATAR, CONTROL_SELECT = range(2)
 STENCIL_CELL, STENCIL_CROSS, STENCIL_BLOCK = range(3)
@@ -81,6 +82,10 @@ class Spec:
     hud_off: int = 11
     control: int = CONTROL_AVATAR
     uses_action5: int = 0
+    action5: int = 1  # A5_CYCLE; 0 = declared but does nothing
+    key_dir: tuple = (0, 1, 2, 3)  # direction of ACTION1..4
+    palette_shuffle: int = 0
+    seed: int = 0
     select_color: int = 15
     # WIN_MATCH rectangles: canvas (x0, y0) must equal target (x1, y1).
     match: tuple = (0, 0, 0, 0, 0, 0)
@@ -138,6 +143,11 @@ class DslNative:
         native.hud_off = spec.hud_off
         native.control = spec.control
         native.uses_action5 = spec.uses_action5
+        native.action5 = spec.action5
+        for i in range(4):
+            native.key_dir[i] = int(spec.key_dir[i])
+        native.palette_shuffle = spec.palette_shuffle
+        native.seed = int(spec.seed) & 0xFFFFFFFF
         native.select_color = spec.select_color
         (native.match_x0, native.match_y0, native.match_x1, native.match_y1,
          native.match_w, native.match_h) = [int(v) for v in spec.match]

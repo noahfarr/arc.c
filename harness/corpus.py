@@ -28,7 +28,8 @@ def save(spec: Spec, labels: dict, path: Path, distances=None) -> None:
                          spec.win_b, spec.pitch, spec.origin_x, spec.origin_y,
                          spec.background, spec.hud, spec.hud_on, spec.hud_off,
                          spec.control, spec.uses_action5, spec.select_color,
-                         *spec.match], np.int32),
+                         *spec.match, spec.action5, *spec.key_dir,
+                         spec.palette_shuffle, spec.seed], np.int32),
         rules=np.array([[r.trigger, r.subject, r.effect, r.predicate,
                          r.pred_a, r.pred_b, r.effect_a, r.effect_b,
                          r.enabled] for r in spec.rules], np.int32
@@ -49,6 +50,9 @@ def load(path: Path) -> tuple[Spec, dict]:
             extra.update(control=int(p[11]), uses_action5=int(p[12]),
                          select_color=int(p[13]),
                          match=tuple(int(v) for v in p[14:20]))
+        if len(p) > 20:
+            extra.update(action5=int(p[20]), key_dir=tuple(int(v) for v in p[21:25]),
+                         palette_shuffle=int(p[25]), seed=int(p[26]))
         rules = [Rule(*[int(v) for v in row]) for row in z["rules"]] \
             if "rules" in z else []
         budgets = z["budgets"] if "budgets" in z else None
@@ -123,8 +127,8 @@ def build(count: int, out: Path, seed: int = 0, trials: int | None = None,
 
     from .clib import Library
     from .dsl import DslGame
-    from .generate import (STAGE_RANDOM_BAR, sample_match, sample_rooms,
-                           sample_select)
+    from .generate import (STAGE_RANDOM_BAR, randomise_controls, sample_match,
+                           sample_rooms, sample_select)
     from .validate import distance_table
 
     library = library or Library()
@@ -147,7 +151,7 @@ def build(count: int, out: Path, seed: int = 0, trials: int | None = None,
                                     stage=stage, max_nodes=nodes)
         if proposal is None:
             continue
-        spec = proposal.spec
+        spec = randomise_controls(rng, proposal.spec, family)
         rates = []
         n_trials = trials or STAGE_TRIALS[stage]
         for level in range(spec.num_levels):
