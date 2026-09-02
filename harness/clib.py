@@ -110,6 +110,8 @@ class Library:
         s.game_hash.argtypes = [v, ctypes.c_size_t]
         s.dsl_state_hash.restype = ctypes.c_uint64
         s.dsl_state_hash.argtypes = [v]
+        s.dsl_solve.restype = i
+        s.dsl_solve.argtypes = [v, i, ctypes.POINTER(i), ctypes.POINTER(i)]
         for name in ("harness_score", "harness_status", "harness_level_index"):
             fn = getattr(s, name)
             fn.restype, fn.argtypes = i, [v]

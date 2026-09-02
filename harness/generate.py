@@ -268,15 +268,15 @@ def _shortest(spec, level, library, aux_size, max_nodes):
     import dataclasses
 
     from .dsl import DslGame
-    from .validate import explore
+    from .validate import solve
 
     one = dataclasses.replace(spec, layouts=spec.layouts[level:level + 1],
                               floors=spec.floors[level:level + 1],
                               budgets=None)
     g = DslGame(one, library=library)
-    e = explore(g, aux_size, max_nodes=max_nodes)
+    shortest, exhausted, _ = solve(g, max_nodes=max_nodes)
     g.close()
-    return e.shortest if e.solvable else None, e.exhausted
+    return shortest, exhausted
 
 
 def sample_environment(rng, levels=6, library=None, aux_size=None,
@@ -727,7 +727,7 @@ def sample_select(rng, levels=6, library=None, aux_size=None,
 # per game: one spec has one set of kinds, and the cycle must only visit
 # colours the target uses or the search space explodes. Scramble clicks
 # per level follow the stage's length bands.
-MATCH_SIDES = {0: (3, 4), 1: (4, 5), 2: (5, 7)}
+MATCH_SIDES = {0: (4, 5), 1: (5, 6), 2: (6, 8)}
 MATCH_COLOURS = {0: (2, 2), 1: (2, 3), 2: (3, 4)}
 
 

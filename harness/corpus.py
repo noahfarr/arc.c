@@ -105,9 +105,13 @@ def baselines_for(shortest, budgets) -> list[int]:
     return out
 
 
-def build(count: int, out: Path, seed: int = 0, trials: int = 10_000,
-          horizon: int = 800, threads: int = 8, verbose: bool = True,
-          families=FAMILIES, library=None, distance_nodes: int = 60_000,
+# Random-play trials per stage: enough to resolve each stage's bar.
+STAGE_TRIALS = {0: 400, 1: 2_000, 2: 10_000}
+
+
+def build(count: int, out: Path, seed: int = 0, trials: int | None = None,
+          horizon: int = 0, threads: int = 8, verbose: bool = True,
+          families=FAMILIES, library=None, distance_nodes: int = 0,
           stages=(2,), prefix: str = "env_", manifest: bool = True) -> list:
     """Generate `count` environments across `families` and curriculum
     `stages` (see generate.STAGE_BANDS), keep those whose non-tutorial
@@ -145,8 +149,12 @@ def build(count: int, out: Path, seed: int = 0, trials: int = 10_000,
             continue
         spec = proposal.spec
         rates = []
+        n_trials = trials or STAGE_TRIALS[stage]
         for level in range(spec.num_levels):
-            rate, _ = certify(spec, trials=trials, horizon=horizon,
+            # Episodes end at the budget, so the horizon only needs to
+            # cover a budget with room for the settle frames.
+            h = horizon or int(spec.budgets[level]) + 8
+            rate, _ = certify(spec, trials=n_trials, horizon=h,
                               threads=threads, seed=made * 97 + level + 1,
                               start_level=level, library=library)
             rates.append(rate)
@@ -164,18 +172,12 @@ def build(count: int, out: Path, seed: int = 0, trials: int = 10_000,
                   "grid": [spec.grid_w, spec.grid_h],
                   "levels": spec.num_levels,
                   "mechanics": proposal.mechanics.get("kinds", [])}
+        # Solver distance tables (for the parked potential shaping) only
+        # when asked: they cost as much as the rest of the build.
         distances = []
         for level in range(spec.num_levels):
-            one = dataclasses.replace(spec, layouts=spec.layouts[level:level + 1],
-                                      floors=spec.floors[level:level + 1],
-                                      budgets=None)
-            g = DslGame(one, library=library)
-            table = distance_table(g, aux_size, max_nodes=distance_nodes)
-            g.close()
-            if table is not None:
-                # The table was built for a one-level spec (level index 0);
-                # the hash includes the level index, so rebuild the keys
-                # for the level's real index.
+            table = None
+            if distance_nodes > 0:
                 table = _rekey(spec, level, library, aux_size, distance_nodes)
             distances.append(table)
         labels["distances"] = [None if t is None else int(len(t[0]))
@@ -204,8 +206,8 @@ def _worker(args):
 
 
 def build_parallel(count: int, out: Path, workers: int = 16, seed: int = 0,
-                   trials: int = 4_000, horizon: int = 800, families=FAMILIES,
-                   stages=(0, 1, 2), distance_nodes: int = 40_000) -> list:
+                   trials: int | None = None, horizon: int = 0, families=FAMILIES,
+                   stages=(0, 1, 2), distance_nodes: int = 0) -> list:
     """build() across `workers` processes, each with its own library and
     seed, writing w<NN>_<i>.npz into `out`; one manifest at the end."""
     import multiprocessing as mp

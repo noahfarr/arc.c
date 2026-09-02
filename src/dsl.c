@@ -53,6 +53,8 @@ uint64_t arc_dsl_state_hash(const struct arc_game *game)
 	h = fnv(h, aux->floor, n);
 	h = fnv(h, &aux->player_x, sizeof(int32_t));
 	h = fnv(h, &aux->player_y, sizeof(int32_t));
+	h = fnv(h, &aux->sel_x, sizeof(int32_t));
+	h = fnv(h, &aux->sel_y, sizeof(int32_t));
 	return h;
 }
 

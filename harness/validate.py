@@ -178,6 +178,18 @@ def distance_table(game, aux_size: int, max_nodes: int = 60_000,
     return keys, vals
 
 
+def solve(game, max_nodes: int = 40_000) -> tuple[int | None, bool, int]:
+    """The C breadth-first search: (shortest or None, exhausted, nodes)."""
+    game.init()
+    shortest = ctypes.c_int32()
+    nodes = ctypes.c_int32()
+    r = game.library.sym.dsl_solve(game.handle, int(max_nodes),
+                                   ctypes.byref(shortest), ctypes.byref(nodes))
+    if r == 1:
+        return int(shortest.value), False, int(nodes.value)
+    return None, r == 0, int(nodes.value)
+
+
 def random_solve_rate(game, trials: int = 10_000, horizon: int = 200,
                       seed: int = 0, actions=None) -> float:
     rng = np.random.default_rng(seed)
