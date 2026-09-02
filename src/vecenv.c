@@ -43,11 +43,13 @@ struct arc_vec_env {
 	int32_t reward_mode;
 	float cap;
 	float shaping;
+	int64_t restarts;
 	float *phi;
 	float *phi_scale;
 	pthread_t *threads;
 	struct slot *slots;
 	pthread_mutex_t lock;
+	pthread_mutex_t pool_lock;
 	pthread_cond_t start_cv;
 	pthread_cond_t done_cv;
 	struct worker_arg proto;
@@ -100,6 +102,7 @@ static void assign(struct arc_vec_env *vec, int32_t i, int32_t k,
 
 static void restart(struct arc_vec_env *vec, int32_t i, struct slot *owner)
 {
+	__atomic_add_fetch(&vec->restarts, 1, __ATOMIC_RELAXED);
 	if (vec->num_games > 1)
 		assign(vec, i, draw(vec, i), owner);
 	arc_game_init(vec->games[i]);
@@ -321,11 +324,13 @@ static void *attend(void *raw)
 static void run(struct arc_vec_env *vec, struct worker_arg proto)
 {
 	proto.vec = vec;
+	pthread_mutex_lock(&vec->pool_lock);
 	if (vec->num_threads <= 1) {
 		proto.start = 0;
 		proto.end = vec->num_envs;
 		proto.owner = &vec->slots[0];
 		work(&proto);
+		pthread_mutex_unlock(&vec->pool_lock);
 		return;
 	}
 
@@ -346,6 +351,27 @@ static void run(struct arc_vec_env *vec, struct worker_arg proto)
 	while (vec->pending > 0)
 		pthread_cond_wait(&vec->done_cv, &vec->lock);
 	pthread_mutex_unlock(&vec->lock);
+	pthread_mutex_unlock(&vec->pool_lock);
+}
+
+void arc_vecenv_replace_game(struct arc_vec_env *vec, int32_t k,
+			     const struct arc_game_spec *spec)
+{
+	if (k < 0 || k >= vec->num_games)
+		return;
+	pthread_mutex_lock(&vec->pool_lock);
+	vec->pool[k] = *spec;
+	pthread_mutex_unlock(&vec->pool_lock);
+}
+
+int32_t arc_vecenv_num_games(const struct arc_vec_env *vec)
+{
+	return vec->num_games;
+}
+
+int64_t arc_vecenv_restarts(const struct arc_vec_env *vec)
+{
+	return __atomic_load_n(&vec->restarts, __ATOMIC_RELAXED);
 }
 
 struct arc_vec_env *arc_vecenv_new_pool(const struct arc_game_spec *pool,
@@ -353,6 +379,7 @@ struct arc_vec_env *arc_vecenv_new_pool(const struct arc_game_spec *pool,
 					int32_t num_threads, uint64_t seed)
 {
 	struct arc_vec_env *vec = calloc(1, sizeof(struct arc_vec_env));
+	pthread_mutex_init(&vec->pool_lock, NULL);
 	vec->num_envs = num_envs;
 	vec->horizon = 0;
 	vec->num_games = num_games;
@@ -437,6 +464,7 @@ void arc_vecenv_free(struct arc_vec_env *vec)
 		pthread_cond_destroy(&vec->start_cv);
 		pthread_mutex_destroy(&vec->lock);
 	}
+	pthread_mutex_destroy(&vec->pool_lock);
 	for (int32_t i = 0; i < vec->num_envs; i++)
 		arc_game_free(vec->games[i]);
 	for (int32_t t = 0; t < vec->num_threads; t++) {

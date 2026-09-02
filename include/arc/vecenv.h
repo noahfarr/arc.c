@@ -38,6 +38,18 @@ struct arc_vec_env *arc_vecenv_new_pool(const struct arc_game_spec *pool,
 					int32_t num_games, int32_t num_envs,
 					int32_t num_threads, uint64_t seed);
 void arc_vecenv_set_packed(struct arc_vec_env *vec, int32_t packed);
+/* Replace pool entry k. Environments currently playing k keep their game
+ * until they next restart, so the old spec's memory must stay valid until
+ * every environment has restarted at least once; new restarts that draw k
+ * get the new spec. Safe to call from another thread than the stepping
+ * one: it waits for a step in progress to finish. */
+void arc_vecenv_replace_game(struct arc_vec_env *vec, int32_t k,
+			     const struct arc_game_spec *spec);
+int32_t arc_vecenv_num_games(const struct arc_vec_env *vec);
+/* Total environment restarts so far; in trial mode every environment
+ * restarts at each boundary, so a rise of 2 * num_envs means every game
+ * created before the count was read has been replaced. */
+int64_t arc_vecenv_restarts(const struct arc_vec_env *vec);
 /* ARC_REWARD_LEVELS: +1 per level (the default). ARC_REWARD_RHAE: on
  * completing level l, l * min(1, (baseline_l / actions_l)^2): the
  * benchmark's per-level score in level units, so level 1 at human

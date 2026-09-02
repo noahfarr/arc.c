@@ -44,6 +44,12 @@ def signatures(lib):
     lib.arc_vecenv_set_reward.argtypes = [ctypes.c_void_p, ctypes.c_int32,
                                           ctypes.c_float]
     lib.arc_vecenv_set_shaping.argtypes = [ctypes.c_void_p, ctypes.c_float]
+    lib.arc_vecenv_replace_game.argtypes = [ctypes.c_void_p, ctypes.c_int32,
+                                            ctypes.POINTER(Spec)]
+    lib.arc_vecenv_num_games.restype = ctypes.c_int32
+    lib.arc_vecenv_num_games.argtypes = [ctypes.c_void_p]
+    lib.arc_vecenv_restarts.restype = ctypes.c_int64
+    lib.arc_vecenv_restarts.argtypes = [ctypes.c_void_p]
     return lib
 
 
@@ -81,6 +87,10 @@ class Pool:
         self.library = library or Library()
         self.lib = signatures(self.library.lib)
         self._keep = []
+        self._retired: list = []
+        self._live: dict = {}
+        self._swaps = 0
+        self._max_frames = max_frames
         self.num_levels: list[int] = []
         humans = human_baselines() if reward == REWARD_RHAE else {}
 
@@ -133,12 +143,54 @@ class Pool:
                                             float(shaping))
         self.num_actions = int(self.lib.arc_vecenv_num_actions(self.handle))
 
-    def _generated(self, path, num_envs, max_frames):
+    def restarts(self) -> int:
+        return int(self.lib.arc_vecenv_restarts(ctypes.c_void_p(self.handle)))
+
+    def replace(self, k: int, path) -> None:
+        """Swap generated game `path` into pool slot k. The buffers of the
+        game it replaces stay alive until every environment has restarted
+        since (see gc), because an environment mid-game keeps playing the
+        old game until then (arc_vecenv_replace_game)."""
+        assert str(path).endswith(".npz"), "only generated games can be swapped in"
+        keep_before = len(self._keep)
+        spec = self._generated(path, self.num_envs, self._max_frames,
+                               level_index=k)
+        buffers = self._keep[keep_before:]
+        self._keep = self._keep[:keep_before]
+        if k in self._live:
+            self._retired.append((self.restarts(), self._live[k]))
+        self._live[k] = buffers
+        self.lib.arc_vecenv_replace_game(ctypes.c_void_p(self.handle), int(k),
+                                         ctypes.byref(spec))
+        self.games[k] = str(path)
+        self._swaps += 1
+        self.gc()
+
+    def gc(self, margin: float = 2.0) -> int:
+        """Free retired buffers once the environment has restarted at least
+        margin * num_envs times since they were retired. In trial mode all
+        environments restart at each boundary, so two boundaries suffice;
+        with terminations only, budgets bound every game's length, and a
+        larger margin covers it."""
+        now = self.restarts()
+        keep, freed = [], 0
+        for tag, buffers in self._retired:
+            if now - tag >= margin * self.num_envs:
+                freed += 1
+            else:
+                keep.append((tag, buffers))
+        self._retired = keep
+        return freed
+
+    def _generated(self, path, num_envs, max_frames, level_index=None):
         from .corpus import load
         from .dsl import DslNative
 
         spec, labels = load(path)
-        self.num_levels.append(int(spec.num_levels))
+        if level_index is None:
+            self.num_levels.append(int(spec.num_levels))
+        else:
+            self.num_levels[level_index] = int(spec.num_levels)
         native = DslNative(spec, self.library)
         self._keep.append(native)
         auxes = (native.aux_t * num_envs)()
@@ -156,7 +208,7 @@ class Pool:
             state_hash = ctypes.cast(fn, ctypes.c_void_p).value
             dist_hash, dist_val, dist_offset = (dh.ctypes.data, dv.ctypes.data,
                                                 do.ctypes.data)
-        return Spec(
+        spec = Spec(
             levels=ctypes.addressof(native.level_data),
             hooks=ctypes.addressof(native.hooks),
             aux_array=ctypes.addressof(auxes),
@@ -172,6 +224,8 @@ class Pool:
             dist_val=dist_val,
             dist_offset=dist_offset,
         )
+        self._keep.append(spec)
+        return spec
 
     def tasks(self, out):
         self.lib.arc_vecenv_tasks(self.handle, out.ctypes.data)
