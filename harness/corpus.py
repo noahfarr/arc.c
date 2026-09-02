@@ -106,17 +106,19 @@ def baselines_for(shortest, budgets) -> list[int]:
 
 def build(count: int, out: Path, seed: int = 0, trials: int = 10_000,
           horizon: int = 800, threads: int = 8, verbose: bool = True,
-          families=FAMILIES, library=None, distance_nodes: int = 60_000) -> list:
-    """Generate `count` environments across `families`, keep those whose
-    non-tutorial levels a random policy wins at most 1 in 10,000 times
-    (the foundation's bar), and save them with their labels."""
+          families=FAMILIES, library=None, distance_nodes: int = 60_000,
+          stages=(2,)) -> list:
+    """Generate `count` environments across `families` and curriculum
+    `stages` (see generate.STAGE_BANDS), keep those whose non-tutorial
+    levels a random policy wins no more often than the stage's bar (the
+    foundation's 1 in 10,000 at stage 2), and save them with labels."""
     import ctypes
 
     import dataclasses
 
     from .clib import Library
     from .dsl import DslGame
-    from .generate import sample_rooms
+    from .generate import STAGE_RANDOM_BAR, sample_rooms
     from .validate import distance_table
 
     library = library or Library()
@@ -130,7 +132,9 @@ def build(count: int, out: Path, seed: int = 0, trials: int = 10_000,
     while made < count and attempts < count * 6:
         attempts += 1
         family = families[attempts % len(families)]
-        proposal = samplers[family](rng, library=library, aux_size=aux_size)
+        stage = stages[(attempts // len(families)) % len(stages)]
+        proposal = samplers[family](rng, library=library, aux_size=aux_size,
+                                    stage=stage)
         if proposal is None:
             continue
         spec = proposal.spec
@@ -140,12 +144,13 @@ def build(count: int, out: Path, seed: int = 0, trials: int = 10_000,
                               threads=threads, seed=made * 97 + level + 1,
                               start_level=level, library=library)
             rates.append(rate)
-        if any(r > 1e-4 for r in rates[1:]):
+        if any(r > STAGE_RANDOM_BAR[stage] for r in rates[1:]):
             continue
         levels = proposal.mechanics["levels"]
         shortest = [m.get("shortest") for m in levels]
         budgets = [int(b) for b in spec.budgets]
         labels = {"family": family,
+                  "stage": stage,
                   "shortest": shortest,
                   "budgets": budgets,
                   "baselines": baselines_for(shortest, budgets),
@@ -174,7 +179,7 @@ def build(count: int, out: Path, seed: int = 0, trials: int = 10_000,
         manifest.append({"name": name, **labels})
         made += 1
         if verbose:
-            print(f"  {name} {family}: shortest={labels['shortest']} "
+            print(f"  {name} {family} stage {stage}: shortest={labels['shortest']} "
                   f"budgets={labels['budgets']} rates="
                   f"{['%.5f' % r for r in rates]}")
     (out / "manifest.json").write_text(json.dumps(manifest, indent=1))

@@ -232,12 +232,21 @@ def sample_push(rng, w=9, h=9, boxes=2, pulls=20, wall_density=0.08,
     return Proposal(spec=spec, seed=0, mechanics={"pulls": applied})
 
 
-# Target bands for the optimal solution length of each level, from the
-# public games: humans need a median of 30 actions on level 1 and are at
-# the optimum there; later levels run 2-2.5x their optimum, and human
-# baselines for the last level have a median of 113 (docs/benchmark.md).
-LENGTH_BANDS = [(12, 30), (18, 40), (24, 55), (30, 70), (36, 90), (40, 120),
-                (45, 140), (50, 160)]
+# Target bands for the optimal solution length of each level, by curriculum
+# stage. Stage 2 is the public games: humans need a median of 30 actions on
+# level 1 and are at the optimum there; later levels run 2-2.5x their
+# optimum, and human baselines for the last level have a median of 113
+# (docs/benchmark.md). Stages 0 and 1 are shorter so that a policy trained
+# from scratch finds its first completions; a corpus mixes the stages.
+STAGE_BANDS = [
+    [(3, 8), (5, 12), (8, 18), (10, 24), (12, 30), (14, 36), (16, 40), (18, 45)],
+    [(6, 16), (10, 24), (14, 32), (18, 42), (22, 55), (26, 65), (30, 75), (34, 85)],
+    [(12, 30), (18, 40), (24, 55), (30, 70), (36, 90), (40, 120), (45, 140), (50, 160)],
+]
+LENGTH_BANDS = STAGE_BANDS[2]
+# Random-play win rate a non-tutorial level may have, by stage; the last is
+# the foundation's own bar.
+STAGE_RANDOM_BAR = [5e-2, 5e-3, 1e-4]
 
 LADDER = [
     dict(w=11, h=11, boxes=1, pulls=30, wall_density=0.06, bias=0.6),
@@ -271,7 +280,7 @@ def _shortest(spec, level, library, aux_size, max_nodes):
 
 
 def sample_environment(rng, levels=6, library=None, aux_size=None,
-                       max_nodes=40_000, attempts=30):
+                       max_nodes=40_000, attempts=30, stage=2):
     """A sokoban ladder whose levels are drawn until their optimal solution
     length falls in LENGTH_BANDS, with a per-level budget derived from it.
 
@@ -285,9 +294,15 @@ def sample_environment(rng, levels=6, library=None, aux_size=None,
     w = max(cfg["w"] for cfg in LADDER[:levels])
     h = max(cfg["h"] for cfg in LADDER[:levels])
     stack_obj, stack_floor, meta, budgets = [], [], [], []
+    bands = STAGE_BANDS[stage]
     for i in range(levels):
         cfg = dict(LADDER[i % len(LADDER)])
-        lo, hi = LENGTH_BANDS[min(i, len(LENGTH_BANDS) - 1)]
+        lo, hi = bands[min(i, len(bands) - 1)]
+        if stage < 2:
+            # Shorter pulls and smaller boards for the easy stages, so the
+            # search exhausts and the optimum lands in the band.
+            cfg["pulls"] = max(4, int(cfg["pulls"] * (0.25 if stage == 0 else 0.5)))
+            cfg["w"] = cfg["h"] = max(7, cfg["w"] - (4 if stage == 0 else 2))
         chosen = None
         for _ in range(attempts):
             cand = sample_push(rng, colors=colors, **cfg)
@@ -328,7 +343,7 @@ def sample_environment(rng, levels=6, library=None, aux_size=None,
                 pitch=pitch, origin_x=(64 - w * pitch) // 2,
                 origin_y=(62 - h * pitch) // 2,
                 budgets=np.array(budgets, np.int32))
-    return Proposal(spec=spec, seed=0, mechanics={"levels": meta})
+    return Proposal(spec=spec, seed=0, mechanics={"levels": meta, "stage": stage})
 
 
 MECHANICS = ("key", "switch", "collect")
@@ -550,7 +565,7 @@ ROOMS_LADDER = [
 
 
 def sample_rooms(rng, levels=6, library=None, aux_size=None,
-                 max_nodes=40_000, attempts=20):
+                 max_nodes=40_000, attempts=20, stage=2):
     """The rooms family as a ladder: each level is redrawn until BFS puts
     its optimum inside LENGTH_BANDS (or the search does not finish), with
     budgets from the optimum."""
@@ -561,10 +576,14 @@ def sample_rooms(rng, levels=6, library=None, aux_size=None,
     if len(parts["kinds"]) > 16 or len(parts["rules"]) > 8:
         return None
     layouts, floors, budgets, meta = [], [], [], []
+    bands = STAGE_BANDS[stage]
     for i in range(levels):
         used, rw, rh, hz, sc, cn = ROOMS_LADDER[min(i, len(ROOMS_LADDER) - 1)]
         used = min(used, len(chosen))
-        lo, hi = LENGTH_BANDS[min(i, len(LENGTH_BANDS) - 1)]
+        if stage < 2:
+            rw, rh = max(3, rw - (2 if stage == 0 else 1)), max(3, rh - (2 if stage == 0 else 1))
+            hz = 0 if stage == 0 else hz
+        lo, hi = bands[min(i, len(bands) - 1)]
         chosen_level = None
         for _ in range(attempts):
             order = list(range(used))
@@ -596,7 +615,7 @@ def sample_rooms(rng, levels=6, library=None, aux_size=None,
     spec = _rooms_spec(parts, layouts, floors, budgets)
     return Proposal(spec=spec, seed=0,
                     mechanics={"kinds": chosen, "hazards": parts["hazard_kinds"],
-                               "levels": meta})
+                               "levels": meta, "stage": stage})
 
 
 def sample_verified(rng, aux_size, library=None, attempts=12, **kwargs):
