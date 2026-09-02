@@ -230,6 +230,7 @@ static void work(const struct worker_arg *a)
 		uint8_t capped = 0;
 		float shaped = shape_reward(vec, i, g, before_level, reward_i,
 					    &term, &capped);
+		(void)capped;
 		if (vec->shaping != 0.0f && vec->phi_scale[i] != 0.0f) {
 			/* Completing the level lands on the goal: phi = 0. */
 			float next = reward_i > 0 ? 0.0f : potential(vec, i);
@@ -263,12 +264,14 @@ static void work(const struct worker_arg *a)
 			a->terminated[i] = 0;
 			a->truncated[i] = 1;
 		}
-		if (term && a->restart_mask && !trunc && !capped) {
+		if (term && a->restart_mask && !trunc) {
 			/* Inside a trial the task must not change: a game that
 			 * ends is RESET as the benchmark does it (level reset
 			 * after a loss, full reset after a win), and the pool
-			 * is only redrawn at the trial boundary. A loss from
-			 * the action cap is final, as it is in the benchmark. */
+			 * is only redrawn at the trial boundary. That includes a
+			 * loss from the action cap; the benchmark would end the
+			 * run there, but a mid-trial game switch would hand the
+			 * agent's memory to another task. */
 			arc_game_perform_action_frames(g, ARC_ACTION_RESET, 0, 0,
 						       NULL, 0);
 			vec->level_actions[i] = 0;
