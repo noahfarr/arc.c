@@ -114,7 +114,7 @@ static float level_weight(const struct arc_game *g, int32_t level)
  * the score delta; also applies the action cap. */
 static float shape_reward(struct arc_vec_env *vec, int32_t i,
 			  struct arc_game *g, int32_t before_level,
-			  int32_t reward_i, uint8_t *term)
+			  int32_t reward_i, uint8_t *term, uint8_t *capped)
 {
 	const int32_t *baseline = vec->pool[vec->task[i]].baseline;
 	int32_t actions = ++vec->level_actions[i];
@@ -139,6 +139,7 @@ static float shape_reward(struct arc_vec_env *vec, int32_t i,
 	    !*term) {
 		arc_game_lose(g);
 		*term = 1;
+		*capped = 1;
 	}
 	return 0.0f;
 }
@@ -159,8 +160,9 @@ static void work(const struct worker_arg *a)
 		arc_game_step(g, a->actions[i], a->vec->packed ? a->owner->frame
 							 : a->obs + (size_t)i * FRAME_BYTES,
 			      &reward_i, &term);
+		uint8_t capped = 0;
 		float shaped = shape_reward(vec, i, g, before_level, reward_i,
-					    &term);
+					    &term, &capped);
 		if (a->vec->packed) {
 			uint8_t *out = (uint8_t *)a->obs +
 				       (size_t)i * (FRAME_BYTES / 2);
@@ -185,7 +187,21 @@ static void work(const struct worker_arg *a)
 			a->terminated[i] = 0;
 			a->truncated[i] = 1;
 		}
-		if (term || trunc) {
+		if (term && a->restart_mask && !trunc && !capped) {
+			/* Inside a trial the task must not change: a game that
+			 * ends is RESET as the benchmark does it (level reset
+			 * after a loss, full reset after a win), and the pool
+			 * is only redrawn at the trial boundary. A loss from
+			 * the action cap is final, as it is in the benchmark. */
+			arc_game_perform_action_frames(g, ARC_ACTION_RESET, 0, 0,
+						       NULL, 0);
+			vec->level_actions[i] = 0;
+			emit(a, i, g);
+			if (a->level)
+				a->level[i] = g->engine.level_index;
+			if (a->score)
+				a->score[i] = g->engine.score;
+		} else if (term || trunc) {
 			restart(vec, i, a->owner);
 			emit(a, i, vec->games[i]);
 			if (a->level)
