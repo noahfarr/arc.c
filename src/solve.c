@@ -77,8 +77,9 @@ static int32_t actions_for(const struct arc_game *game, struct action *out,
 	return count;
 }
 
-int32_t arc_dsl_solve(struct arc_game *game, int32_t max_nodes,
-		      int32_t *shortest_out, int32_t *nodes_out)
+int32_t arc_dsl_solve_path(struct arc_game *game, int32_t max_nodes,
+			   int32_t *path_out, int32_t path_cap,
+			   int32_t *shortest_out, int32_t *nodes_out)
 {
 	const size_t aux_size = sizeof(struct arc_dsl_aux);
 	const size_t size = arc_game_state_size(game, aux_size);
@@ -90,6 +91,8 @@ int32_t arc_dsl_solve(struct arc_game *game, int32_t max_nodes,
 	struct set seen;
 	unsigned char *states;
 	int32_t *depth;
+	int32_t *parent;
+	int32_t *via;
 	int32_t head = 0, tail = 0, result = 0;
 
 	while (cap < (size_t)max_nodes * 4)
@@ -99,6 +102,8 @@ int32_t arc_dsl_solve(struct arc_game *game, int32_t max_nodes,
 	seen.used = calloc(cap, 1);
 	states = malloc((size_t)(max_nodes + 1) * size);
 	depth = malloc((size_t)(max_nodes + 1) * sizeof(int32_t));
+	parent = malloc((size_t)(max_nodes + 1) * sizeof(int32_t));
+	via = malloc((size_t)(max_nodes + 1) * sizeof(int32_t));
 	*shortest_out = -1;
 
 	arc_game_save(game, aux_size, states);
@@ -120,6 +125,22 @@ int32_t arc_dsl_solve(struct arc_game *game, int32_t max_nodes,
 			    game->engine.level_index > start_level) {
 				*shortest_out = d + 1;
 				result = 1;
+				if (path_out && path_cap >= d + 1) {
+					/* Walk parents back from the node we
+					 * expanded; the final action is a. */
+					int32_t n = head - 1, k = d;
+
+					path_out[3 * k] = actions[a].id;
+					path_out[3 * k + 1] = actions[a].x;
+					path_out[3 * k + 2] = actions[a].y;
+					while (k > 0) {
+						k--;
+						path_out[3 * k] = actions[via[n]].id;
+						path_out[3 * k + 1] = actions[via[n]].x;
+						path_out[3 * k + 2] = actions[via[n]].y;
+						n = parent[n];
+					}
+				}
 				goto done;
 			}
 			if (game->engine.status == GAME_OVER)
@@ -132,6 +153,8 @@ int32_t arc_dsl_solve(struct arc_game *game, int32_t max_nodes,
 			}
 			arc_game_save(game, aux_size, states + (size_t)tail * size);
 			depth[tail] = d + 1;
+			parent[tail] = head - 1;
+			via[tail] = a;
 			tail++;
 		}
 	}
@@ -142,5 +165,14 @@ done:
 	free(seen.used);
 	free(states);
 	free(depth);
+	free(parent);
+	free(via);
 	return result;
+}
+
+int32_t arc_dsl_solve(struct arc_game *game, int32_t max_nodes,
+		      int32_t *shortest_out, int32_t *nodes_out)
+{
+	return arc_dsl_solve_path(game, max_nodes, NULL, 0, shortest_out,
+				  nodes_out);
 }

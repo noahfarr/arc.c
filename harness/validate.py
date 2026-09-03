@@ -190,6 +190,23 @@ def solve(game, max_nodes: int = 40_000) -> tuple[int | None, bool, int]:
     return None, r == 0, int(nodes.value)
 
 
+def solve_path(game, max_nodes: int = 40_000, cap: int = 512):
+    """The C search's winning action sequence as [(id, x, y), ...], or
+    None when no win was found."""
+    game.init()
+    buf = np.zeros(3 * cap, np.int32)
+    shortest = ctypes.c_int32()
+    nodes = ctypes.c_int32()
+    r = game.library.sym.dsl_solve_path(game.handle, int(max_nodes),
+                                        buf.ctypes.data_as(ctypes.c_void_p),
+                                        int(cap), ctypes.byref(shortest),
+                                        ctypes.byref(nodes))
+    if r != 1:
+        return None
+    n = int(shortest.value)
+    return [tuple(int(v) for v in buf[3 * k:3 * k + 3]) for k in range(n)]
+
+
 def random_solve_rate(game, trials: int = 10_000, horizon: int = 200,
                       seed: int = 0, actions=None) -> float:
     rng = np.random.default_rng(seed)

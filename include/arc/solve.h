@@ -15,6 +15,13 @@ extern "C" {
 int32_t arc_dsl_solve(struct arc_game *game, int32_t max_nodes,
 		      int32_t *shortest_out, int32_t *nodes_out);
 
+/* As arc_dsl_solve, and on success writes the winning action sequence
+ * into path_out as (id, x, y) triples, up to path_cap actions; returns
+ * the same code, with shortest_out the path length. */
+int32_t arc_dsl_solve_path(struct arc_game *game, int32_t max_nodes,
+			   int32_t *path_out, int32_t path_cap,
+			   int32_t *shortest_out, int32_t *nodes_out);
+
 #ifdef __cplusplus
 }
 #endif

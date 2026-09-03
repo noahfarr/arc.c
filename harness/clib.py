@@ -112,6 +112,9 @@ class Library:
         s.dsl_state_hash.argtypes = [v]
         s.dsl_solve.restype = i
         s.dsl_solve.argtypes = [v, i, ctypes.POINTER(i), ctypes.POINTER(i)]
+        s.dsl_solve_path.restype = i
+        s.dsl_solve_path.argtypes = [v, i, v, i, ctypes.POINTER(i),
+                                     ctypes.POINTER(i)]
         for name in ("harness_score", "harness_status", "harness_level_index"):
             fn = getattr(s, name)
             fn.restype, fn.argtypes = i, [v]
