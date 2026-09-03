@@ -167,8 +167,21 @@ def build(count: int, out: Path, seed: int = 0, trials: int | None = None,
         levels = proposal.mechanics["levels"]
         shortest = [m.get("shortest") for m in levels]
         budgets = [int(b) for b in spec.budgets]
+        # Known solutions per level as (id, x, y) pixel actions, for
+        # families whose generator knows one (match); the solver's path
+        # covers the others when it finishes.
+        solutions = []
+        for m in levels:
+            cells = m.get("solution_cells")
+            if cells is None:
+                solutions.append(None)
+            else:
+                solutions.append([(6, spec.origin_x + cx * spec.pitch + spec.pitch // 2,
+                                   spec.origin_y + cy * spec.pitch + spec.pitch // 2)
+                                  for cx, cy in cells])
         labels = {"family": family,
                   "stage": stage,
+                  "solutions": solutions,
                   "shortest": shortest,
                   "budgets": budgets,
                   "baselines": baselines_for(shortest, budgets),

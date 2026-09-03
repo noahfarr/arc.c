@@ -773,8 +773,10 @@ def sample_match(rng, levels=6, library=None, aux_size=None,
             flr = np.full((h, w), EMPTY, np.int8)
             target = rng.integers(0, ncol, (side, side))
             canvas = target.copy()
+            clicked = []
             for _ in range(scramble):
                 y, x = rng.integers(0, side, 2)
+                clicked.append((int(y), int(x)))
                 cells = [(y, x)]
                 if stencil >= STENCIL_CROSS:
                     cells += [(y - 1, x), (y + 1, x), (y, x - 1), (y, x + 1)]
@@ -798,17 +800,22 @@ def sample_match(rng, levels=6, library=None, aux_size=None,
                     continue
                 if shortest is not None and not (lo <= shortest <= hi):
                     continue
-            chosen = (obj, flr, shortest)
+            chosen = (obj, flr, shortest, clicked)
             break
         if chosen is None:
             return None
-        obj, flr, shortest = chosen
+        obj, flr, shortest, clicked = chosen
         layouts.append(obj)
         floors.append(flr)
         base = shortest if shortest is not None else scramble
         budgets.append(int(round(base * rng.uniform(*BUDGET_RANGE))))
+        # A known solution: undo every scramble click by cycling the same
+        # cell the rest of the way round (ncol - 1 more clicks). Stored as
+        # grid cells of the canvas; the corpus turns them into pixels.
+        solution = [(1 + x, 1 + y) for (y, x) in clicked for _ in range(ncol - 1)]
         meta.append({"side": side, "colours": ncol, "stencil": stencil,
-                     "scramble": scramble, "shortest": shortest})
+                     "scramble": scramble, "shortest": shortest,
+                     "solution_cells": solution})
     L = np.stack(layouts)
     F = np.stack(floors)
     pitch, gx, gy = _geometry(w, h)
