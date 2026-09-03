@@ -246,7 +246,7 @@ STAGE_BANDS = [
 LENGTH_BANDS = STAGE_BANDS[2]
 # Random-play win rate a non-tutorial level may have, by stage; the last is
 # the foundation's own bar.
-STAGE_RANDOM_BAR = [5e-2, 5e-3, 1e-4]
+STAGE_RANDOM_BAR = [2.5e-1, 5e-3, 1e-4]
 
 LADDER = [
     dict(w=11, h=11, boxes=1, pulls=30, wall_density=0.06, bias=0.6),
@@ -727,8 +727,13 @@ def sample_select(rng, levels=6, library=None, aux_size=None,
 # per game: one spec has one set of kinds, and the cycle must only visit
 # colours the target uses or the search space explodes. Scramble clicks
 # per level follow the stage's length bands.
-MATCH_SIDES = {0: (4, 5), 1: (5, 6), 2: (6, 8)}
+MATCH_SIDES = {0: (2, 3), 1: (4, 6), 2: (6, 8)}
 MATCH_COLOURS = {0: (2, 2), 1: (2, 3), 2: (3, 4)}
+# Length bands for the match family at stage 0: a uniform clicker on a
+# 2x2 or 3x3 canvas completes a one- or two-click level often enough to
+# give the click head its first gradient; the shared bands start at 3
+# exact clicks, which it never does.
+MATCH_STAGE0_BANDS = [(1, 2), (1, 3), (2, 4), (2, 5), (3, 6), (3, 8), (4, 9), (4, 9)]
 
 
 def sample_match(rng, levels=6, library=None, aux_size=None,
@@ -757,7 +762,7 @@ def sample_match(rng, levels=6, library=None, aux_size=None,
         kinds.append(Kind(color=swatch[3 + c]))
     w, h = 2 * side + 3, side + 2
     match = (1, 1, side + 2, 1, side, side)
-    bands = STAGE_BANDS[stage]
+    bands = MATCH_STAGE0_BANDS if stage == 0 else STAGE_BANDS[stage]
     layouts, floors, budgets, meta = [], [], [], []
     capacity = side * side * (colours - 1)
     for i in range(levels):
