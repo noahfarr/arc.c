@@ -1,5 +1,6 @@
 import dataclasses
 
+import os
 import numpy as np
 
 ARC_MAX_KINDS = 16
@@ -634,6 +635,14 @@ def _pad(layouts, floors, fill=EMPTY):
 
 
 def _geometry(w, h):
+    if ALIGN_GRID:
+        # Cells on the policy's token grid: pitch a multiple of ALIGN_GRID
+        # px and origins on that grid (diagnostic for the encoder).
+        pitch = int(max(1, min(62 // max(w, h), 8)) // ALIGN_GRID * ALIGN_GRID)
+        pitch = max(pitch, ALIGN_GRID)
+        ox = (64 - w * pitch) // 2 // ALIGN_GRID * ALIGN_GRID
+        oy = (62 - h * pitch) // 2 // ALIGN_GRID * ALIGN_GRID
+        return pitch, ox, oy
     pitch = int(max(1, min(62 // max(w, h), 8)))
     return pitch, (64 - w * pitch) // 2, (62 - h * pitch) // 2
 
@@ -641,9 +650,11 @@ def _geometry(w, h):
 # (blocks, side, walls, decoys) per level of the selection family
 # A single block is random-solvable on any board, so only the tutorial
 # level has one.
+ALIGN_GRID = int(os.environ.get("ARC_ALIGN_GRID", "0"))
+
 SELECT_LADDER = [(1, 8, 0.04, 0), (2, 10, 0.08, 1), (2, 12, 0.10, 1),
                  (3, 12, 0.10, 2), (3, 14, 0.12, 2), (4, 14, 0.12, 3),
-                 (4, 16, 0.12, 3), (5, 16, 0.12, 4)]
+                 (4, 15, 0.12, 3), (5, 15, 0.12, 4)]  # side <= 15 keeps 4 px cells
 
 
 def sample_select(rng, levels=6, library=None, aux_size=None,
@@ -727,7 +738,7 @@ def sample_select(rng, levels=6, library=None, aux_size=None,
 # per game: one spec has one set of kinds, and the cycle must only visit
 # colours the target uses or the search space explodes. Scramble clicks
 # per level follow the stage's length bands.
-MATCH_SIDES = {0: (2, 3), 1: (4, 6), 2: (6, 8)}
+MATCH_SIDES = {0: (2, 3), 1: (4, 6), 2: (6, 7)}  # side 8 gives 3 px cells: unreachable by a 4 px click grid
 MATCH_COLOURS = {0: (2, 2), 1: (2, 3), 2: (3, 4)}
 # Length bands for the match family at stage 0: a uniform clicker on a
 # 2x2 or 3x3 canvas completes a one- or two-click level often enough to
@@ -752,7 +763,11 @@ def sample_match(rng, levels=6, library=None, aux_size=None,
     lo_side, hi_side = MATCH_SIDES[stage]
     side = int(rng.integers(lo_side, hi_side + 1))
     colours = int(rng.integers(MATCH_COLOURS[stage][0], MATCH_COLOURS[stage][1] + 1))
-    stencil = int(rng.choice([0, 0, 1, 2] if stage == 2 else [0, 1]))
+    # Neighbour stencils turn the level into lights-out (ft09 plays like
+    # that), whose optimal click set is a linear system rather than a
+    # cell-by-cell comparison; keep it rare and only at the last stage so the
+    # bulk of the family teaches the comparison itself.
+    stencil = int(rng.choice([0, 0, 0, 1])) if stage == 2 else 0
     canvas_k = len(kinds)
     for c in range(colours):
         kinds.append(Kind(color=swatch[3 + c], on_click=CYCLE, click_a=canvas_k,
@@ -824,6 +839,12 @@ def sample_match(rng, levels=6, library=None, aux_size=None,
     L = np.stack(layouts)
     F = np.stack(floors)
     pitch, gx, gy = _geometry(w, h)
+    # Canvas and target cells are drawn a pixel short of the cell so a
+    # grid line of floor separates them, as the public games draw their
+    # grids; every cell is then its own uniform-colour region.
+    if pitch >= 3:
+        kinds = [dataclasses.replace(k, size=pitch - 1) if i >= canvas_k else k
+                 for i, k in enumerate(kinds)]
     spec = Spec(kinds=kinds, layouts=L, floors=F, player_kind=ghost_k,
                 win_mode=WIN_MATCH, pitch=pitch, origin_x=gx, origin_y=gy,
                 match=match, budgets=np.array(budgets, np.int32))

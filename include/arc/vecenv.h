@@ -38,6 +38,11 @@ struct arc_vec_env *arc_vecenv_new_pool(const struct arc_game_spec *pool,
 					int32_t num_games, int32_t num_envs,
 					int32_t num_threads, uint64_t seed);
 void arc_vecenv_set_packed(struct arc_vec_env *vec, int32_t packed);
+/* Also write region tokens (arc/tokens.h) for every observation into
+ * buf, laid out [num_envs][cap][ARC_TOKEN_FIELDS] int16; NULL turns it
+ * off. The buffer belongs to the caller. */
+void arc_vecenv_set_tokens(struct arc_vec_env *vec, int16_t *buf,
+			   int32_t cap);
 /* Replace pool entry k. Environments currently playing k keep their game
  * until they next restart, so the old spec's memory must stay valid until
  * every environment has restarted at least once; new restarts that draw k
@@ -66,6 +71,12 @@ void arc_vecenv_set_reward(struct arc_vec_env *vec, int32_t mode, float cap);
  * the same as its completion is worth. States off the table (levels the
  * solver did not finish, or unreachable ones) get no shaping. */
 void arc_vecenv_set_shaping(struct arc_vec_env *vec, float weight);
+/* Trials the length of a game's budget (arc_vecenv_step_trial): with
+ * multiple > 0 an environment's trial also ends when its game is won or
+ * when it has taken multiple * (sum of the per-level baselines) actions,
+ * as the benchmark ends a run; a game without baselines only ends on a
+ * win or the caller's restart mask. 0 (the default) turns it off. */
+void arc_vecenv_set_trial_budget(struct arc_vec_env *vec, float multiple);
 void arc_vecenv_tasks(const struct arc_vec_env *vec, int32_t *out);
 void arc_vecenv_action_ids(const struct arc_vec_env *vec, int32_t *out);
 void arc_vecenv_action_counts(const struct arc_vec_env *vec, int32_t *out);

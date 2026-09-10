@@ -263,7 +263,7 @@ Coverage against the public set, by the categories above:
 | click-only manipulation | partly (click toggles a tile) | rotation rings, rotate-subtree, sliders, drag-to-cell, attraction, program bits — 7 games |
 | reach goal | yes | goal conditioned on state |
 | all-on-targets | yes (push boxes) | target matching by size/colour/identity |
-| picture wins | yes (`sample_match`): canvas equals target, colour-cycle clicks with lights-out stencils | sequence and count wins (tr87, sk48, sb26, tn36, su15) |
+| picture wins | yes (`sample_match`): canvas equals target, colour-cycle clicks; a lights-out cross stencil in a quarter of stage-2 games | sequence and count wins (tr87, sk48, sb26, tn36, su15) |
 | doors, switches, keys, collect | yes | switches that are *stood on* by a second actor (g50t echo, m0r0) |
 | hazards, patrols, chase | yes | path-finding allies/adversaries, followers, bouncing drifters, fuses |
 | gravity | yes (tiles fall) | side-view avatar physics, flow, attraction, conservation |

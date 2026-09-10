@@ -1,4 +1,5 @@
 #include "arc/vecenv.h"
+#include "arc/tokens.h"
 
 #include <pthread.h>
 #include <stdlib.h>
@@ -56,17 +57,33 @@ struct arc_vec_env {
 	int32_t generation;
 	int32_t pending;
 	int packed;
+	int16_t *tokens;
+	int32_t token_cap;
+	float trial_budget;
+	int32_t *budget;
 	int stop;
 };
+
+static void tokens_for(const struct arc_vec_env *vec, int32_t i,
+		       const int8_t *frame)
+{
+	if (!vec->tokens)
+		return;
+	arc_frame_tokens(frame, (struct arc_token *)(vec->tokens +
+				(size_t)i * vec->token_cap * ARC_TOKEN_FIELDS),
+			 vec->token_cap, NULL);
+}
 
 static void emit(const struct worker_arg *a, int32_t i, struct arc_game *g)
 {
 	if (!a->vec->packed) {
 		arc_game_frame(g, a->obs + (size_t)i * FRAME_BYTES);
+		tokens_for(a->vec, i, a->obs + (size_t)i * FRAME_BYTES);
 		return;
 	}
 	int8_t *tmp = a->owner->frame;
 	arc_game_frame(g, tmp);
+	tokens_for(a->vec, i, tmp);
 	uint8_t *out = (uint8_t *)a->obs + (size_t)i * (FRAME_BYTES / 2);
 	for (int32_t k = 0; k < FRAME_BYTES / 2; k++)
 		out[k] = (uint8_t)((tmp[2 * k] & 0x0f) |
@@ -108,6 +125,17 @@ static void restart(struct arc_vec_env *vec, int32_t i, struct slot *owner)
 	arc_game_init(vec->games[i]);
 	vec->elapsed[i] = 0;
 	vec->level_actions[i] = 0;
+	vec->budget[i] = 0;
+	if (vec->trial_budget > 0.0f) {
+		const struct arc_game_spec *s = &vec->pool[vec->task[i]];
+		if (s->baseline) {
+			int32_t n = vec->games[i]->levels->num_levels;
+			float total = 0.0f;
+			for (int32_t l = 0; l < n; l++)
+				total += (float)s->baseline[l];
+			vec->budget[i] = (int32_t)(vec->trial_budget * total + 0.5f);
+		}
+	}
 }
 
 /* Distance to win of the current state, or -1 when off the table. */
@@ -240,6 +268,8 @@ static void work(const struct worker_arg *a)
 		}
 		if (reward_i > 0 && !term && vec->shaping != 0.0f)
 			begin_level_potential(vec, i);
+		tokens_for(vec, i, a->vec->packed ? a->owner->frame
+						  : a->obs + (size_t)i * FRAME_BYTES);
 		if (a->vec->packed) {
 			uint8_t *out = (uint8_t *)a->obs +
 				       (size_t)i * (FRAME_BYTES / 2);
@@ -258,6 +288,20 @@ static void work(const struct worker_arg *a)
 			a->level[i] = g->engine.level_index;
 		if (a->score)
 			a->score[i] = g->engine.score;
+		if (a->restart_mask && vec->trial_budget > 0.0f) {
+			/* Budget trials: a won game or a spent budget ends the
+			 * run, as the benchmark does; the next trial draws a
+			 * fresh game. */
+			int won = term && g->engine.status == WIN;
+			int spent = vec->budget[i] > 0 &&
+				    vec->elapsed[i] >= vec->budget[i];
+			if (won || spent) {
+				term = 0;
+				trunc = 1;
+				a->terminated[i] = 0;
+				a->truncated[i] = 1;
+			}
+		}
 		if (a->restart_mask && a->restart_mask[i]) {
 			term = 0;
 			trunc = 1;
@@ -394,6 +438,7 @@ struct arc_vec_env *arc_vecenv_new_pool(const struct arc_game_spec *pool,
 	vec->rng = calloc(num_envs, sizeof(uint32_t));
 	vec->elapsed = calloc(num_envs, sizeof(int32_t));
 	vec->level_actions = calloc(num_envs, sizeof(int32_t));
+	vec->budget = calloc(num_envs, sizeof(int32_t));
 	vec->phi = calloc(num_envs, sizeof(float));
 	vec->phi_scale = calloc(num_envs, sizeof(float));
 	vec->reward_mode = ARC_REWARD_LEVELS;
@@ -482,6 +527,7 @@ void arc_vecenv_free(struct arc_vec_env *vec)
 	free(vec->rng);
 	free(vec->elapsed);
 	free(vec->level_actions);
+	free(vec->budget);
 	free(vec->phi);
 	free(vec->phi_scale);
 	free(vec);
@@ -555,6 +601,18 @@ struct arc_vec_env *arc_vecenv_new(const struct arc_level_data *levels,
 				      NULL,           NULL,
 				      NULL,           NULL };
 	return arc_vecenv_new_pool(&spec, 1, num_envs, num_threads, 1);
+}
+
+void arc_vecenv_set_trial_budget(struct arc_vec_env *vec, float multiple)
+{
+	vec->trial_budget = multiple;
+}
+
+void arc_vecenv_set_tokens(struct arc_vec_env *vec, int16_t *buf,
+			   int32_t cap)
+{
+	vec->tokens = buf;
+	vec->token_cap = cap;
 }
 
 void arc_vecenv_reset(struct arc_vec_env *vec, int8_t *obs)

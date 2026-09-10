@@ -143,6 +143,11 @@ class Pool:
                                             float(shaping))
         self.num_actions = int(self.lib.arc_vecenv_num_actions(self.handle))
 
+    def set_trial_budget(self, multiple: float) -> None:
+        """Trials end when the game is won or after multiple x the summed
+        per-level baseline actions (0 turns it off)."""
+        self.library.sym.vecenv_set_trial_budget(self.handle, float(multiple))
+
     def restarts(self) -> int:
         return int(self.lib.arc_vecenv_restarts(ctypes.c_void_p(self.handle)))
 

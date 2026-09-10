@@ -112,6 +112,9 @@ class Library:
         s.dsl_state_hash.argtypes = [v]
         s.dsl_solve.restype = i
         s.dsl_solve.argtypes = [v, i, ctypes.POINTER(i), ctypes.POINTER(i)]
+        s.vecenv_set_trial_budget.argtypes = [v, ctypes.c_float]
+        s.frame_tokens.restype = i
+        s.frame_tokens.argtypes = [v, v, i, v]
         s.dsl_solve_path.restype = i
         s.dsl_solve_path.argtypes = [v, i, v, i, ctypes.POINTER(i),
                                      ctypes.POINTER(i)]
