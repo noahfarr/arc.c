@@ -51,20 +51,36 @@ share no convention an agent could memorise and carry from one to the next.
 [docs/benchmark.md](docs/benchmark.md) tracks what it covers, category by
 category, against the 25 public games.
 
-Four families, each drawn as a six-level ladder:
+Four families, each drawn as a six-level ladder, each shown here being
+solved by the C breadth-first solver:
 
-| | Family | Mechanic | Closest public games |
-|---|---|---|---|
-| <img src="docs/media/sokoban.gif" width="190" alt="a generated sokoban level being solved"> | `sokoban` | An avatar pushes boxes onto goal tiles; every box must end on a target. Levels are built **backwards**, dragging boxes off their goals, so a solution exists before the level does. | `lp85`, `s5i5`, `wa30` |
-| <img src="docs/media/rooms.gif" width="190" alt="a generated rooms level being solved"> | `rooms` | Rooms gated by keys, switches and collectibles, each gate opening the way to the next, with patrolling and chasing hazards. | `dc22`, `ls20`, `tu93` |
-| <img src="docs/media/select.gif" width="190" alt="a generated select level being solved"> | `select` | No avatar. A click or `ACTION5` selects a block, the arrows slide it, and every block must come to rest on a goal. | `cn04`, `ka59`, `sk48` |
-| <img src="docs/media/match.gif" width="190" alt="a generated match level being solved"> | `match` | A canvas on the left, a target on the right. Clicking cycles a cell's colour — with a stencil, its neighbours cycle too, lights-out style. Scrambled backwards from the solved state. | `cd82`, `re86`, `ar25` |
+<div align="center">
+<img src="docs/media/sokoban.gif" width="330" alt="a generated sokoban level being solved">
+<img src="docs/media/rooms.gif" width="330" alt="a generated rooms level being solved">
+<br>
+<img src="docs/media/select.gif" width="330" alt="a generated select level being solved">
+<img src="docs/media/match.gif" width="330" alt="a generated match level being solved">
+</div>
 
-Each GIF is one generated level being solved by the C breadth-first solver,
-replayed through the same engine an agent trains against. Regenerate them:
+| Family | Mechanic | Closest public games |
+|---|---|---|
+| `sokoban` | An avatar pushes boxes onto goal tiles; every box must end on a target. Levels are built **backwards**, dragging boxes off their goals, so a solution exists before the level does. | `lp85`, `s5i5`, `wa30` |
+| `rooms` | Rooms gated by keys, switches and collectibles, each gate opening the way to the next, with patrolling and chasing hazards. | `dc22`, `ls20`, `tu93` |
+| `select` | No avatar. A click or `ACTION5` selects a block, the arrows slide it, and every block must come to rest on a goal. | `cn04`, `ka59`, `sk48` |
+| `match` | A canvas on the left, a target on the right. Clicking cycles a cell's colour — with a stencil, its neighbours cycle too, lights-out style. Scrambled backwards from the solved state. | `cd82`, `re86`, `ar25` |
+
+The panel around each frame is drawn **only for these recordings** — an
+agent observes the 64x64 grid alone, and the games paint their own budget
+bar into it exactly as the public games do (`frame[63, x]`, filled to
+`round(64 * steps / budget)`). What the panel reports adapts to the game
+type, because progress means something different in each: boxes `ON
+TARGET`, `GATES` opened, blocks `PLACED`, canvas `CELLS` matching. Each
+reading is computed from the same win condition the engine checks, so it
+cannot drift from the game.
 
 ```bash
-uv run python -m harness.gifs --out docs/media
+uv run python -m harness.gifs --out docs/media    # panelled, as above
+uv run python -m harness.gifs --plain             # the bare 64x64 frames
 ```
 
 ### What a generated game has to pass

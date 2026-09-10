@@ -251,6 +251,17 @@ class DslGame:
             self.max_frames)
         return [self.frames[i].copy() for i in range(min(n, self.max_frames))]
 
+    def cells(self):
+        """The live (grid, floor) as int8 arrays shaped (grid_h, grid_w),
+        copied out of the aux the engine is stepping. Read-only: for
+        rendering and diagnostics, never for driving the game."""
+        h, w = self.spec.grid_h, self.spec.grid_w
+        out = []
+        for name in ("grid", "floor"):
+            flat = np.frombuffer(bytes(getattr(self._aux, name)), np.int8)
+            out.append(flat[:h * w].reshape(h, w).copy())
+        return out[0], out[1]
+
     @property
     def score(self):
         return int(self.library.sym.harness_score(self.handle))

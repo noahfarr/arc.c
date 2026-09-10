@@ -55,7 +55,7 @@ def _wins(spec, level: int, actions, library) -> bool:
 
 
 def render(family: str, out: Path, seed: int, lo: int, hi: int,
-           library, scale: int, tries: int = 40):
+           library, scale: int, plain: bool = False, tries: int = 40):
     """Draw games until one has a level with a verified winning solution
     of length in [lo, hi], and write it as a GIF."""
     import numpy as np
@@ -78,8 +78,15 @@ def render(family: str, out: Path, seed: int, lo: int, hi: int,
             if not _wins(spec, level, actions, library):
                 continue
             path = out / f"{family}.gif"
+            # The budget is the game's own, not the stripped one the
+            # solver ran against, so the panel counts against what a real
+            # episode would allow.
+            chrome = {"title": f"arc.c \u00b7 {family}",
+                      "budget": int(spec.budgets[level]),
+                      "levels": spec.num_levels, "level": level}
             frames = record(_level_spec(spec, level), path, actions,
-                            scale=scale, library=library)
+                            scale=scale, library=library,
+                            chrome=None if plain else chrome)
             kb = path.stat().st_size / 1024
             print(f"{family:8} level {level}  {len(actions):3} actions  "
                   f"{frames:3} frames  {kb:6.0f} KB  {path}")
@@ -97,6 +104,8 @@ def main() -> int:
     parser.add_argument("--max", dest="hi", type=int, default=34)
     parser.add_argument("--scale", type=int, default=6)
     parser.add_argument("--families", nargs="*", default=list(SAMPLERS))
+    parser.add_argument("--plain", action="store_true",
+                        help="write the bare 64x64 frames, with no panel")
     args = parser.parse_args()
 
     args.out.mkdir(parents=True, exist_ok=True)
@@ -104,7 +113,7 @@ def main() -> int:
     ok = True
     for family in args.families:
         ok &= render(family, args.out, args.seed, args.lo, args.hi,
-                     library, args.scale) is not None
+                     library, args.scale, args.plain) is not None
     return 0 if ok else 1
 
 
